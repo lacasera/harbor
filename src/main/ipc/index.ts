@@ -97,6 +97,8 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('projects:updateProcess', (id, specId, patch) =>
     harbor.projects.updateProcess(id, specId, patch)
   )
+  handle('projects:addProcess', (id, input) => harbor.projects.addProcess(id, input))
+  handle('projects:removeProcess', (id, specId) => harbor.projects.removeProcess(id, specId))
   handle('projects:envFile', async (projectId) =>
     readProjectEnv(harbor.projects.find(projectId).path)
   )

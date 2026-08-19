@@ -121,9 +121,13 @@ export class PhpRuntime implements RuntimeDriver {
         const json = JSON.parse(await readFile(composer, 'utf8')) as {
           require?: Record<string, string>
         }
+        // Return the constraint as written, not its first number. Reducing
+        // "^8.3" to "8.3" throws away the range, and the resolver then looks
+        // for an installed 8.3.x and finds nothing on a machine with 8.4 and
+        // 8.5 — which is how the same project reported two different PHP
+        // versions in two places.
         const constraint = json.require?.php
-        const match = constraint?.match(/(\d+\.\d+)/)
-        if (match?.[1]) return match[1]
+        if (constraint) return constraint.trim()
       } catch {
         /* malformed composer.json is the user's problem, not a crash */
       }

@@ -174,7 +174,8 @@ export function ProjectDetail({
             { id: 'overview', label: 'Overview' },
             { id: 'env', label: 'Env' },
             { id: 'insights', label: 'Insights' },
-            { id: 'logs', label: 'Logs' }
+            { id: 'logs', label: 'Logs' },
+            { id: 'processes', label: 'Processes' }
           ]}
         />
       </div>
@@ -192,7 +193,6 @@ export function ProjectDetail({
             busy={busy}
             copied={copied}
             copy={copy}
-            onChanged={onChanged}
             onPatch={(patch) => void run(() => invoke('projects:update', project.id, patch))}
             onOpenServices={onOpenServices}
           />
@@ -207,6 +207,10 @@ export function ProjectDetail({
         )}
 
         {tab === 'insights' && <InsightsTab project={project} />}
+
+        {tab === 'processes' && (
+          <ProcessesTab project={project} busy={busy} onChanged={onChanged} />
+        )}
 
         {tab === 'logs' && (
           <div className="card">
@@ -245,7 +249,6 @@ function Overview({
   busy,
   copied,
   copy,
-  onChanged,
   onPatch,
   onOpenServices
 }: {
@@ -257,7 +260,6 @@ function Overview({
   busy: boolean
   copied: string | null
   copy: (text: string, key: string) => void
-  onChanged: (next: ProjectDescriptor) => void
   onPatch: (patch: {
     typeId?: string
     redetectType?: boolean
@@ -439,8 +441,6 @@ function Overview({
           </div>
         </div>
 
-        <ProcessesCard project={project} busy={busy} onChanged={onChanged} />
-
         <div className="card card-pad">
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Services</div>
           <div className="hint" style={{ marginBottom: 10 }}>
@@ -484,11 +484,14 @@ function Overview({
 }
 
 /**
- * Queue workers, schedulers and asset builds. Detected per project, so this
- * only ever offers what the application can actually use — an app on
- * QUEUE_CONNECTION=sync is never asked whether it wants a worker.
+ * Everything this project runs alongside being served.
+ *
+ * Detected entries come from the project's type and framework drivers, so the
+ * list reflects what the application actually needs. Custom entries are the
+ * escape hatch for everything a driver cannot know about — a bespoke worker, a
+ * one-off artisan command, a tunnel.
  */
-function ProcessesCard({
+function ProcessesTab({
   project,
   busy,
   onChanged
@@ -496,13 +499,13 @@ function ProcessesCard({
   project: ProjectDescriptor
   busy: boolean
   onChanged: (next: ProjectDescriptor) => void
-}): React.JSX.Element | null {
+}): React.JSX.Element {
   const [working, setWorking] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-
-  if (!project.processes.length) return null
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ label: '', command: '', runtime: '', autoStart: false })
 
   const act = (id: string, fn: () => Promise<ProjectDescriptor>): void => {
     setWorking(id)
@@ -513,89 +516,227 @@ function ProcessesCard({
       .finally(() => setWorking(null))
   }
 
-  return (
-    <div className="card card-pad">
-      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Processes</div>
-      <div className="hint" style={{ marginBottom: 10 }}>
-        Started with the project when enabled
+  const detected = project.processes.filter((p) => !p.custom)
+  const custom = project.processes.filter((p) => p.custom)
+
+  const row = (p: ProjectProcessDescriptor): React.JSX.Element => (
+    <div key={p.id} className="proc-item">
+      <div className="proc-item-main">
+        <div className="proc-head">
+          <StatusDot
+            status={p.running ? 'running' : p.state === 'crashed' ? 'error' : 'stopped'}
+          />
+          <span className="proc-label">{p.label}</span>
+          {p.runtime && <span className="pill mono">{p.runtime}</span>}
+          {p.overridden && <span className="pill mono">edited</span>}
+          {p.state === 'crashed' && !p.running && (
+            <span className="small" style={{ color: 'var(--rd)' }}>
+              exited unexpectedly
+            </span>
+          )}
+        </div>
+        {p.description && <div className="hint">{p.description}</div>}
+
+        {editing === p.id ? (
+          <div className="hstack" style={{ gap: 6, marginTop: 8 }}>
+            <input
+              className="field-input mono"
+              style={{ flex: 1 }}
+              value={draft}
+              autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setEditing(null)}
+            />
+            <button
+              type="button"
+              className="btn xs"
+              onClick={() => {
+                setEditing(null)
+                act(p.id, () =>
+                  invoke('projects:updateProcess', project.id, p.id, { command: draft })
+                )
+              }}
+            >
+              Save
+            </button>
+            <button type="button" className="btn xs" onClick={() => setEditing(null)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="proc-command"
+            title="Edit the command"
+            onClick={() => {
+              setEditing(p.id)
+              setDraft(p.command)
+            }}
+          >
+            {p.command}
+          </button>
+        )}
       </div>
 
+      <div className="proc-item-actions">
+        <label className="proc-auto" title="Start this with the project">
+          <Toggle
+            on={p.enabled}
+            label={`Start ${p.label} with the project`}
+            disabled={busy || working === p.id}
+            onChange={(enabled) =>
+              act(p.id, () => invoke('projects:updateProcess', project.id, p.id, { enabled }))
+            }
+          />
+          <span className="small muted">auto</span>
+        </label>
+
+        <button
+          type="button"
+          className={`btn sm ${p.running ? '' : 'primary'}`}
+          disabled={busy || working === p.id}
+          onClick={() =>
+            act(p.id, () =>
+              invoke(
+                p.running ? 'projects:stopProcess' : 'projects:startProcess',
+                project.id,
+                p.id
+              )
+            )
+          }
+        >
+          {working === p.id ? '…' : p.running ? 'Stop' : 'Start'}
+        </button>
+
+        {p.custom && (
+          <button
+            type="button"
+            className="btn xs danger"
+            disabled={busy || working === p.id}
+            onClick={() => act(p.id, () => invoke('projects:removeProcess', project.id, p.id))}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {error && <p className="error-text">{error}</p>}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {project.processes.map((p: ProjectProcessDescriptor) => (
-          <div key={p.id} className="proc-row">
-            <div className="proc-head">
-              <StatusDot status={p.running ? 'running' : p.state === 'crashed' ? 'error' : 'stopped'} small />
-              <span className="proc-label">{p.label}</span>
+      <div className="card">
+        <div className="card-head">
+          <span>Detected</span>
+          <span className="small muted">
+            From this project&apos;s {project.frameworkId ?? project.typeId} driver
+          </span>
+        </div>
+        {detected.length ? (
+          detected.map(row)
+        ) : (
+          <div className="proc-item">
+            <span className="small muted">
+              Nothing detected for this project type. Add a command below.
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <span>Your commands</span>
+          <button
+            type="button"
+            className="btn xs outline-ac"
+            disabled={busy}
+            onClick={() => setAdding((a) => !a)}
+          >
+            {adding ? 'Cancel' : 'Add command'}
+          </button>
+        </div>
+
+        {adding && (
+          <div className="proc-add">
+            <div className="hstack" style={{ gap: 8 }}>
+              <input
+                className="field-input"
+                style={{ width: 190 }}
+                placeholder="Name, e.g. Reverb"
+                value={form.label}
+                autoFocus
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+              />
+              <input
+                className="field-input mono"
+                style={{ flex: 1, minWidth: 240 }}
+                placeholder="Command, e.g. php artisan reverb:start"
+                value={form.command}
+                onChange={(e) => setForm({ ...form, command: e.target.value })}
+              />
+              <select
+                className="field-select"
+                style={{ width: 110 }}
+                value={form.runtime}
+                onChange={(e) => setForm({ ...form, runtime: e.target.value })}
+                title="Which runtime provides the binary"
+              >
+                <option value="">runtime…</option>
+                <option value="php">php</option>
+                <option value="node">node</option>
+                <option value="bun">bun</option>
+                <option value="deno">deno</option>
+              </select>
+            </div>
+            <div className="hstack" style={{ gap: 10, marginTop: 10 }}>
+              <label className="proc-auto">
+                <Toggle
+                  on={form.autoStart}
+                  label="Start with the project"
+                  onChange={(autoStart) => setForm({ ...form, autoStart })}
+                />
+                <span className="small muted">start with the project</span>
+              </label>
               <div className="grow" />
               <button
                 type="button"
-                className="btn xs"
-                disabled={busy || working === p.id}
+                className="btn sm primary"
+                disabled={busy || !form.label.trim() || !form.command.trim()}
                 onClick={() =>
-                  act(p.id, () =>
-                    invoke(p.running ? 'projects:stopProcess' : 'projects:startProcess', project.id, p.id)
+                  act('add', () =>
+                    invoke('projects:addProcess', project.id, {
+                      label: form.label,
+                      command: form.command,
+                      runtime: form.runtime || undefined,
+                      autoStart: form.autoStart
+                    }).then((next) => {
+                      setForm({ label: '', command: '', runtime: '', autoStart: false })
+                      setAdding(false)
+                      return next
+                    })
                   )
                 }
               >
-                {working === p.id ? '…' : p.running ? 'Stop' : 'Start'}
+                Add
               </button>
-              <Toggle
-                on={p.enabled}
-                label={`Start ${p.label} with the project`}
-                disabled={busy || working === p.id}
-                onChange={(enabled) =>
-                  act(p.id, () =>
-                    invoke('projects:updateProcess', project.id, p.id, { enabled })
-                  )
-                }
-              />
             </div>
-
-            {p.description && <div className="hint">{p.description}</div>}
-
-            {editing === p.id ? (
-              <div className="hstack" style={{ gap: 6, marginTop: 6 }}>
-                <input
-                  className="field-input mono"
-                  style={{ flex: 1 }}
-                  value={draft}
-                  autoFocus
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn xs"
-                  onClick={() => {
-                    setEditing(null)
-                    act(p.id, () =>
-                      invoke('projects:updateProcess', project.id, p.id, { command: draft })
-                    )
-                  }}
-                >
-                  Save
-                </button>
-                <button type="button" className="btn xs" onClick={() => setEditing(null)}>
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="proc-command"
-                title="Edit the command"
-                onClick={() => {
-                  setEditing(p.id)
-                  setDraft(p.command)
-                }}
-              >
-                {p.command}
-                {p.overridden && <span className="pill mono">edited</span>}
-              </button>
-            )}
+            <p className="hint" style={{ marginTop: 8 }}>
+              Runs in the project directory. Anything long-running can start with the project;
+              one-off commands are fine too — start them by hand and watch the Logs tab.
+            </p>
           </div>
-        ))}
+        )}
+
+        {custom.length
+          ? custom.map(row)
+          : !adding && (
+              <div className="proc-item">
+                <span className="small muted">
+                  Nothing yet. Anything the drivers cannot know about goes here.
+                </span>
+              </div>
+            )}
       </div>
     </div>
   )

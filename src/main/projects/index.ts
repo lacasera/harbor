@@ -143,6 +143,7 @@ export class ProjectManager extends EventEmitter {
       runtimeOverride: null,
       serviceIds: [],
       processOverrides: {},
+      customProcesses: [],
       createdAt: Date.now()
     }
 
@@ -490,11 +491,21 @@ export class ProjectManager extends EventEmitter {
   /** Specs with the user's choices and live state folded in. */
   async describeProcesses(project: Project): Promise<ProjectProcessDescriptor[]> {
     const overrides = project.processOverrides ?? {}
-    return (await this.processSpecs(project)).map((spec) => {
+    const detected = await this.processSpecs(project)
+    const custom = project.customProcesses ?? []
+    // Detected first, then the user's own — a stable order matters when the
+    // list is a control panel rather than a report.
+    const all = [
+      ...detected.map((spec) => ({ spec, custom: false })),
+      ...custom.map((spec) => ({ spec, custom: true }))
+    ]
+
+    return all.map(({ spec, custom: isCustom }) => {
       const override = overrides[spec.id] ?? {}
       const handle = this.deps.processes.findByOwner('project', project.id, true, spec.id)
       return {
         ...spec,
+        custom: isCustom,
         command: override.command ?? spec.command,
         overridden: Boolean(override.command),
         // The driver only recommends; a stored choice always wins.
@@ -524,6 +535,59 @@ export class ProjectManager extends EventEmitter {
 
     // Turning one off should stop it now, not at the next restart.
     if (patch.enabled === false) await this.stopProcess(projectId, specId).catch(() => undefined)
+    return this.emitChanged(project)
+  }
+
+  /**
+   * Add a process the drivers did not detect. Ids are namespaced so a custom
+   * entry can never shadow a detected one and silently change what runs.
+   */
+  async addProcess(
+    projectId: string,
+    input: { label: string; command: string; runtime?: string; autoStart?: boolean }
+  ): Promise<ProjectDescriptor> {
+    const project = this.find(projectId)
+    const label = input.label.trim()
+    const command = input.command.trim()
+    if (!label) throw new Error('A name is required')
+    if (!command) throw new Error('A command is required')
+
+    const base = `custom:${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+    const taken = new Set((await this.describeProcesses(project)).map((p) => p.id))
+    let id = base
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+
+    const spec: ProjectProcessSpec = {
+      id,
+      label,
+      description: 'Added by you',
+      command,
+      runtime: (input.runtime as ProjectProcessSpec['runtime']) || undefined,
+      autoStart: input.autoStart ?? false,
+      restart: 'never'
+    }
+
+    project.customProcesses = [...(project.customProcesses ?? []), spec]
+    this.deps.store.update((st) => {
+      const idx = st.projects.findIndex((p) => p.id === projectId)
+      if (idx >= 0) st.projects[idx] = project
+    })
+    return this.emitChanged(project)
+  }
+
+  async removeProcess(projectId: string, specId: string): Promise<ProjectDescriptor> {
+    const project = this.find(projectId)
+    await this.stopProcess(projectId, specId).catch(() => undefined)
+
+    project.customProcesses = (project.customProcesses ?? []).filter((p) => p.id !== specId)
+    const overrides = { ...(project.processOverrides ?? {}) }
+    delete overrides[specId]
+    project.processOverrides = overrides
+
+    this.deps.store.update((st) => {
+      const idx = st.projects.findIndex((p) => p.id === projectId)
+      if (idx >= 0) st.projects[idx] = project
+    })
     return this.emitChanged(project)
   }
 
@@ -685,6 +749,7 @@ export class ProjectManager extends EventEmitter {
       // Projects persisted before this field existed have no array.
       serviceIds: project.serviceIds ?? [],
       processOverrides: project.processOverrides ?? {},
+      customProcesses: project.customProcesses ?? [],
       processes: await this.describeProcesses(project).catch(() => []),
       resolvedRuntime: await this.resolveRuntime(project).catch(() => null),
       resolvedStartCommand: await this.resolveStartCommand(project).catch(() => null),

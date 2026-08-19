@@ -126,6 +126,14 @@ export interface IpcContract {
     [projectId: string, specId: string, patch: ProjectProcessOverride],
     ProjectDescriptor
   ]
+  'projects:addProcess': [
+    [
+      projectId: string,
+      input: { label: string; command: string; runtime?: string; autoStart?: boolean }
+    ],
+    ProjectDescriptor
+  ]
+  'projects:removeProcess': [[projectId: string, specId: string], ProjectDescriptor]
 
   'processes:list': [[], ProcessHandle[]]
   'processes:stop': [[processId: string], void]

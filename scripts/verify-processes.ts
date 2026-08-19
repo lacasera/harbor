@@ -61,6 +61,41 @@ void (async () => {
     const stopped = (await harbor.projects.describeProcesses(project)).find((p) => p.id === 'queue')
     step('disabling stops it', stopped?.running === false, `state=${stopped?.state}`)
     step('the choice is persisted', stopped?.enabled === false)
+
+    // ── custom commands ───────────────────────────────────────────────────
+    const added = await harbor.projects.addProcess(project.id, {
+      label: 'Harbor probe',
+      command: 'php artisan --version',
+      runtime: 'php'
+    })
+    const custom = added.processes.find((p) => p.custom)
+    step('a custom command can be added', Boolean(custom), custom?.command ?? '')
+    step(
+      'its id cannot shadow a detected one',
+      custom?.id.startsWith('custom:') === true,
+      custom?.id ?? ''
+    )
+    step('custom entries are distinguishable', custom?.custom === true)
+
+    if (custom) {
+      await harbor.projects.startProcess(project.id, custom.id)
+      await wait(2500)
+      const ran = harbor.logs
+        .query({ sources: [project.id], limit: 200 })
+        .filter((l) => l.stream === custom.id)
+      step(
+        'a one-off command runs and its output is captured',
+        ran.length > 0,
+        ran[0]?.message.slice(0, 50) ?? 'no output'
+      )
+
+      const after = await harbor.projects.removeProcess(project.id, custom.id)
+      step(
+        'removing it leaves the detected ones alone',
+        !after.processes.some((p) => p.custom) && after.processes.length === before.length,
+        `${after.processes.length} remain`
+      )
+    }
   } finally {
     await harbor.projects.stopAllProcesses(project.id).catch(() => undefined)
     // Restore Harbor's own recommendation rather than leaving it switched off.

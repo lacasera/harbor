@@ -77,6 +77,7 @@ const baseProject = (over: Partial<Project>): Project => ({
   runtimeOverride: null,
   serviceIds: [],
   processOverrides: {},
+  customProcesses: [],
   createdAt: 0,
   ...over
 })
@@ -230,6 +231,14 @@ check('version matching resolves ranges to installed builds', () => {
   assert.equal(matchVersion('20', ['18.20.4', '20.11.1', '20.14.0']), '20.14.0')
   assert.equal(matchVersion('^18.20.4', ['18.20.4', '20.11.1']), '18.20.4')
   assert.equal(matchVersion('22', ['18.20.4']), null)
+
+  // The case that made one project report two different PHP versions: a
+  // caret range is satisfied by a newer minor, and must resolve to the newest
+  // installed one rather than to nothing.
+  assert.equal(matchVersion('^8.3', ['8.5', '8.4']), '8.5')
+  assert.equal(matchVersion('>=8.2', ['8.5', '8.4']), '8.5')
+  // A bare version is a pin, not a range: no match means no match.
+  assert.equal(matchVersion('8.3', ['8.5', '8.4']), null)
 })
 
 check('tableize follows Laravel pluralization conventions', () => {

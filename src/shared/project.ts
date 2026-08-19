@@ -91,6 +91,8 @@ export interface Project {
   runtimeOverride: RuntimeRef | null
   /** Per-process user choices, keyed by spec id. */
   processOverrides: Record<string, ProjectProcessOverride>
+  /** Processes the user added themselves, beyond what the drivers detected. */
+  customProcesses: ProjectProcessSpec[]
   /**
    * Services this project uses. Drives the aggregated .env block, so it is an
    * explicit choice rather than "whatever happens to be running".
@@ -126,6 +128,8 @@ export interface ProjectProcessSpec {
 
 /** A spec plus the user's choices and its live state. */
 export interface ProjectProcessDescriptor extends ProjectProcessSpec {
+  /** Added by the user rather than detected — only these can be deleted. */
+  custom: boolean
   enabled: boolean
   /** True when the command differs from what the driver detected. */
   overridden: boolean

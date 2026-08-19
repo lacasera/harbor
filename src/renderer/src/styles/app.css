@@ -1430,32 +1430,49 @@
   color: var(--rd);
 }
 
-/* ── project companion processes ────────────────────────────────────────── */
+/* ── project processes ─────────────────────────────────────────────────── */
 
-.proc-row {
-  padding-bottom: 10px;
+.proc-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--ln2);
 }
-.proc-row:last-child {
-  padding-bottom: 0;
+.proc-item:last-child {
   border-bottom: 0;
+}
+.proc-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.proc-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
 }
 .proc-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .proc-label {
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
 }
-.proc-command {
+.proc-auto {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  cursor: pointer;
+}
+.proc-command {
+  display: block;
   width: 100%;
-  margin-top: 6px;
-  padding: 5px 8px;
+  margin-top: 8px;
+  padding: 6px 9px;
   border-radius: 6px;
   border: 1px solid var(--ln);
   background: var(--pn2);
@@ -1469,4 +1486,9 @@
 .proc-command:hover {
   border-color: var(--tx3);
   color: var(--tx);
+}
+.proc-add {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ln2);
+  background: var(--pn2);
 }

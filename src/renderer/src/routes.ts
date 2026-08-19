@@ -8,6 +8,6 @@ export type Route =
   | { name: 'logs' }
   | { name: 'settings' }
 
-export type ProjectTab = 'overview' | 'env' | 'insights' | 'logs'
+export type ProjectTab = 'overview' | 'env' | 'insights' | 'logs' | 'processes'
 export type ServiceTab = 'config' | 'env' | 'logs'
 export type InsightTab = 'erd' | 'deps' | 'uml'
