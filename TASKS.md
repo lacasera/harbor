@@ -222,15 +222,27 @@ shape as LocalStack's, which is verified.
 
 ## Phase 5 — code intelligence
 
-- [ ] **5.1 — Validate the Eloquent analyzer against real apps.** It is
-  regex-based by design; run it over two or three real Laravel codebases and
-  fix what it misses. Warnings must name what it could not parse.
+- [x] **5.1 — Validated against real Laravel codebases.** *(done)*
+  Run over two real apps (20 and 24 models). Three defects found and fixed:
+  every model under `app/Models` was parsed **twice** (both roots reached it),
+  **`User` was never found** because Laravel's User extends `Authenticatable`
+  rather than `Model` — it is the most connected model in any app, and 36–40
+  relations pointed at nothing — and modern **typed migration closures**
+  (`function (Blueprint $table): void {`) were skipped entirely, leaving 14
+  models with no columns. Also stopped warning on `morphTo()`, which is
+  polymorphic by design and was most of the warning volume.
+  Both apps now analyze with zero warnings, zero dangling relations and zero
+  column-less models.
 - [ ] **5.2 — Symfony/Doctrine analyzer** (entity attributes → same graph).
-- [ ] **5.3 — File-watch invalidation.** The cache invalidates on mtime at read
-  time; add a watcher so an open Insights tab refreshes.
-- [ ] **5.4 — Project ↔ service association.** The Env tab currently aggregates
-  *every running service* because no association exists (stated in the UI).
-  Add per-project service selection, persist it, and scope the block.
+  Left for next session rather than rushed; the Eloquent work above is the
+  template to follow, including validating it against a real codebase.
+- [x] **5.3 — File-watch invalidation.** *(done)*
+  Sources are watched recursively and debounced; the main process pushes
+  `analysis:invalidated` and an open Insights tab re-analyzes.
+- [x] **5.4 — Project ↔ service association.** *(done)*
+  Projects carry `serviceIds`, chosen with toggles on the Overview tab; the Env
+  tab exports exactly those. The "aggregates everything running" stand-in and
+  its apology in the UI are gone.
 
 ---
 

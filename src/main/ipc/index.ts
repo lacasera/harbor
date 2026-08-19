@@ -46,6 +46,9 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   harbor.projects.on('changed', (descriptor) => send('project:changed', descriptor))
   harbor.processes.on('changed', (handleUpdate) => send('process:changed', handleUpdate))
   harbor.processes.on('usage', (samples) => send('usage:sample', samples))
+  harbor.intelligence.on('invalidated', (projectId: string) =>
+    send('analysis:invalidated', projectId)
+  )
 
   // ── app ─────────────────────────────────────────────────────────────────
   handle('app:info', () => ({

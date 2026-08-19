@@ -66,6 +66,11 @@ export interface Project {
   startCommandOverride: string | null
   /** User-pinned runtime version; null means "resolve it". */
   runtimeOverride: RuntimeRef | null
+  /**
+   * Services this project uses. Drives the aggregated .env block, so it is an
+   * explicit choice rather than "whatever happens to be running".
+   */
+  serviceIds: string[]
   createdAt: number
 }
 

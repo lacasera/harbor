@@ -73,6 +73,8 @@ export class HarborApp {
 
     this.dns = new DnsmasqManager(this.native, this.privileged, this.processes)
     this.intelligence = createCodeIntelligence()
+    // Stop watching a project's sources once it is no longer managed.
+    this.projects.on('forgotten', (id: string) => this.intelligence.unwatch(id))
   }
 
   async start(): Promise<void> {
@@ -93,6 +95,7 @@ export class HarborApp {
   async shutdown(): Promise<void> {
     this.processes.stopUsagePolling()
     this.services.stopHealthPolling()
+    this.intelligence.stopAll()
     await this.services.stopAll()
     await this.processes.stopAll()
     // Persist synchronously: quitting must not drop the last config change.

@@ -6,7 +6,7 @@ import type { RuntimeDescriptor } from '../../../shared/runtime.js'
 import type { LogLine } from '../../../shared/logs.js'
 import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import type { ProjectTab } from '../routes.js'
-import { invoke } from '../ipc/client.js'
+import { invoke, subscribe } from '../ipc/client.js'
 import {
   CopyIconButton,
   StatusDot,
@@ -160,7 +160,13 @@ export function ProjectDetail({
           />
         )}
 
-        {tab === 'env' && <EnvTab services={services} />}
+        {tab === 'env' && (
+          <EnvTab
+            project={project}
+            services={services}
+            onManage={() => setTab('overview')}
+          />
+        )}
 
         {tab === 'insights' && <InsightsTab project={project} />}
 
@@ -207,6 +213,7 @@ function Overview({
   onPatch: (patch: {
     runtimeOverride?: { runtime: string; version: string } | null
     secure?: boolean
+    serviceIds?: string[]
   }) => void
   onOpenServices: () => void
 }): React.JSX.Element {
@@ -228,8 +235,6 @@ function Overview({
           ['Port', project.port ? String(project.port) : '—'],
           ['Restarts', proc ? String(proc.restarts) : '—']
         ]
-
-  const enabled = services.filter((s) => s.status.health === 'running')
 
   return (
     <div className="two-col">
@@ -358,15 +363,32 @@ function Overview({
         </div>
 
         <div className="card card-pad">
-          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>Enabled services</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Services</div>
+          <div className="hint" style={{ marginBottom: 10 }}>
+            Chosen here, exported on the Env tab
+          </div>
           <div className="hstack" style={{ gap: 6 }}>
-            {enabled.map((service) => (
-              <span key={service.id} className="pill">
-                <StatusDot status={statusOf(service.status.health)} small />
-                {service.displayName}
-              </span>
-            ))}
-            {!enabled.length && <span className="small muted">No services running</span>}
+            {services.map((service) => {
+              const on = project.serviceIds.includes(service.id)
+              return (
+                <button
+                  key={service.id}
+                  type="button"
+                  className={`chip ${on ? 'on' : ''}`}
+                  disabled={busy}
+                  onClick={() =>
+                    onPatch({
+                      serviceIds: on
+                        ? project.serviceIds.filter((id) => id !== service.id)
+                        : [...project.serviceIds, service.id]
+                    })
+                  }
+                >
+                  <StatusDot status={statusOf(service.status.health)} small />
+                  {service.displayName}
+                </button>
+              )
+            })}
           </div>
           <button
             type="button"
@@ -382,24 +404,34 @@ function Overview({
   )
 }
 
-function EnvTab({ services }: { services: ServiceDescriptor[] }): React.JSX.Element {
+function EnvTab({
+  project,
+  services,
+  onManage
+}: {
+  project: ProjectDescriptor
+  services: ServiceDescriptor[]
+  onManage: () => void
+}): React.JSX.Element {
   const [blocks, setBlocks] = useState<EnvBlockData[]>([])
   const { copied, copy } = useCopy()
 
-  const runningIds = useMemo(
-    () => services.filter((s) => s.status.health === 'running').map((s) => s.id),
-    [services]
+  // Only this project's services — an aggregate of everything running was a
+  // stand-in until projects could declare what they use.
+  const selected = useMemo(
+    () => project.serviceIds.filter((id) => services.some((s) => s.id === id)),
+    [project.serviceIds, services]
   )
 
   useEffect(() => {
     let cancelled = false
-    void invoke('services:envBlocks', runningIds).then((result) => {
+    void invoke('services:envBlocks', selected).then((result) => {
       if (!cancelled) setBlocks(result)
     })
     return () => {
       cancelled = true
     }
-  }, [runningIds])
+  }, [selected])
 
   const rows = toRows(blocks, true)
   const varCount = rows.filter((r) => r.eq).length
@@ -459,6 +491,16 @@ function EnvTab({ services }: { services: ServiceDescriptor[] }): React.JSX.Elem
         <EnvLines rows={rows} />
       </div>
 
+      {!selected.length && (
+        <p className="small muted" style={{ marginTop: 12 }}>
+          No services selected for this project yet —{' '}
+          <button type="button" className="back" style={{ color: 'var(--ac)' }} onClick={onManage}>
+            choose them on the Overview tab
+          </button>
+          .
+        </p>
+      )}
+
       <div className="hstack" style={{ marginTop: 12 }}>
         <button
           type="button"
@@ -486,10 +528,6 @@ function EnvTab({ services }: { services: ServiceDescriptor[] }): React.JSX.Elem
           {copied === 'json' ? 'Copied' : 'Copy as JSON'}
         </button>
       </div>
-      <p style={{ marginTop: 8 }} className="small muted">
-        Project-level service selection isn&apos;t wired yet — this aggregates every running
-        service.
-      </p>
     </div>
   )
 }
@@ -510,6 +548,15 @@ function InsightsTab({ project }: { project: ProjectDescriptor }): React.JSX.Ele
   )
 
   useEffect(() => analyze(false), [analyze])
+
+  // Re-analyze on a source change so an open diagram cannot go stale.
+  useEffect(
+    () =>
+      subscribe('analysis:invalidated', (id) => {
+        if (id === project.id) analyze(true)
+      }),
+    [project.id, analyze]
+  )
 
   return <Insights results={results} analyzing={analyzing} onAnalyze={() => analyze(true)} />
 }

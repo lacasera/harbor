@@ -17,7 +17,7 @@ import {
 import { createPhpFrameworkRegistry } from '../src/main/projects/php-frameworks/index.js'
 import { interpolate, defaultsFor, validate } from '../src/main/services/registry.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
-import { tableize } from '../src/main/intelligence/eloquent-erd.js'
+import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent-erd.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
 import { MinioDriver } from '../src/main/services/minio.js'
@@ -67,6 +67,7 @@ const baseProject = (over: Partial<Project>): Project => ({
   port: 3100,
   startCommandOverride: null,
   runtimeOverride: null,
+  serviceIds: [],
   createdAt: 0,
   ...over
 })
@@ -227,6 +228,90 @@ check('tableize follows Laravel pluralization conventions', () => {
   assert.equal(tableize('Category'), 'categories')
   assert.equal(tableize('OrderItem'), 'order_items')
   assert.equal(tableize('Address'), 'addresses')
+})
+
+check('the Eloquent analyzer handles the shapes real Laravel apps use', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'harbor-eloquent-'))
+  mkdirSync(join(root, 'app', 'Models'), { recursive: true })
+  mkdirSync(join(root, 'database', 'migrations'), { recursive: true })
+
+  // Laravel's own User extends Authenticatable, not Model.
+  writeFileSync(
+    join(root, 'app', 'Models', 'User.php'),
+    `<?php
+namespace App\\Models;
+use Illuminate\\Foundation\\Auth\\User as Authenticatable;
+class User extends Authenticatable {
+  public function posts() { return $this->hasMany(Post::class); }
+  public function avatar() { return $this->morphOne(Asset::class, 'assetable'); }
+}
+`
+  )
+  writeFileSync(
+    join(root, 'app', 'Models', 'Post.php'),
+    `<?php
+namespace App\\Models;
+use Illuminate\\Database\\Eloquent\\Model;
+class Post extends Model {
+  public function author() { return $this->belongsTo(User::class); }
+}
+`
+  )
+  // A polymorphic model: morphTo has no static target and must not warn.
+  writeFileSync(
+    join(root, 'app', 'Models', 'Asset.php'),
+    `<?php
+namespace App\\Models;
+use Illuminate\\Database\\Eloquent\\Model;
+class Asset extends Model {
+  public function assetable() { return $this->morphTo(); }
+}
+`
+  )
+  // Modern migrations use a typed closure.
+  writeFileSync(
+    join(root, 'database', 'migrations', '2025_01_01_000000_create_users_table.php'),
+    `<?php
+return new class () extends Migration {
+    public function up(): void
+    {
+        Schema::create('users', function (Blueprint $table): void {
+            $table->bigIncrements('id');
+            $table->string('email')->unique();
+            $table->string('name')->nullable();
+            $table->timestamps();
+        });
+    }
+};
+`
+  )
+
+  const result = await new EloquentErdAnalyzer().analyze(root)
+  const names = result.entities.map((e) => e.name).sort()
+
+  assert.deepEqual(names, ['Asset', 'Post', 'User'], 'User must be found despite Authenticatable')
+  assert.equal(new Set(names).size, names.length, 'entities must not be duplicated')
+
+  const user = result.entities.find((e) => e.name === 'User')
+  assert.ok(user, 'User entity')
+  // Proves the typed-closure migration was parsed.
+  assert.deepEqual(
+    user?.fields.map((f) => f.name),
+    ['id', 'email', 'name', 'created_at', 'updated_at']
+  )
+  assert.equal(user?.fields[0]?.primary, true, 'bigIncrements is the primary key')
+
+  // morphTo is polymorphic by design, not a parse failure. (Warnings about
+  // Post/Asset having no migration are correct — this fixture only defines a
+  // users table — so assert on the morphTo case specifically.)
+  assert.ok(
+    !result.warnings.some((w) => w.includes('assetable')),
+    `morphTo must not warn, got: ${result.warnings.join(' | ')}`
+  )
+  assert.ok(!result.relations.some((r) => r.to === 'Asset' && r.kind === 'belongs-to'))
+
+  const known = new Set(result.entities.map((e) => e.id))
+  assert.ok(result.relations.every((r) => known.has(r.to)), 'no dangling relation targets')
 })
 
 check('mermaid ERD drops relations to unparsed models', () => {

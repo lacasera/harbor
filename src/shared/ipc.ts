@@ -88,6 +88,7 @@ export interface IpcContract {
         startCommandOverride?: string | null
         runtimeOverride?: { runtime: RuntimeId; version: string } | null
         secure?: boolean
+        serviceIds?: string[]
       }
     ],
     ProjectDescriptor
@@ -137,6 +138,8 @@ export interface IpcEvents {
   'project:changed': ProjectDescriptor
   'process:changed': ProcessHandle
   'usage:sample': ResourceUsage[]
+  /** A project's sources changed; its cached analysis was dropped. */
+  'analysis:invalidated': string
 }
 
 export type IpcEventName = keyof IpcEvents

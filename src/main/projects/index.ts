@@ -132,6 +132,7 @@ export class ProjectManager extends EventEmitter {
       port: null,
       startCommandOverride: null,
       runtimeOverride: null,
+      serviceIds: [],
       createdAt: Date.now()
     }
 
@@ -200,6 +201,7 @@ export class ProjectManager extends EventEmitter {
     if (handle) await this.deps.processes.stop(handle.id)
     this.nginx.remove(project)
     this.deps.ports.release(`project:${id}`)
+    this.emit('forgotten', id)
     this.deps.store.update((s) => {
       s.projects = s.projects.filter((p) => p.id !== id)
     })
@@ -212,6 +214,7 @@ export class ProjectManager extends EventEmitter {
       startCommandOverride?: string | null
       runtimeOverride?: { runtime: RuntimeId; version: string } | null
       secure?: boolean
+      serviceIds?: string[]
     }
   ): Promise<ProjectDescriptor> {
     const project = this.find(id)
@@ -241,6 +244,7 @@ export class ProjectManager extends EventEmitter {
       }
     }
     if (patch.secure !== undefined) project.secure = patch.secure
+    if (patch.serviceIds !== undefined) project.serviceIds = patch.serviceIds
 
     this.deps.store.update((s) => {
       const idx = s.projects.findIndex((p) => p.id === id)
@@ -386,6 +390,8 @@ export class ProjectManager extends EventEmitter {
     const handle = this.deps.processes.findByOwner('project', project.id)
     return {
       ...project,
+      // Projects persisted before this field existed have no array.
+      serviceIds: project.serviceIds ?? [],
       resolvedRuntime: await this.resolveRuntime(project).catch(() => null),
       resolvedStartCommand: await this.resolveStartCommand(project).catch(() => null),
       processId: handle?.id ?? null,

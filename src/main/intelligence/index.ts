@@ -1,4 +1,6 @@
-import { existsSync, statSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { existsSync, statSync, watch, type FSWatcher } from 'node:fs'
+import { join } from 'node:path'
 import type { AnalysisResult, ProjectAnalyzer } from '../../shared/intelligence.js'
 import type { Project } from '../../shared/project.js'
 import { EloquentErdAnalyzer } from './eloquent-erd.js'
@@ -16,9 +18,14 @@ interface CacheEntry {
  * of the app does. Always on-demand and cached — parking a project must never
  * block on parsing it.
  */
-export class CodeIntelligence {
+/** Directories and manifests whose changes can alter an analysis result. */
+const WATCHED = ['app', 'src', 'database', 'composer.json', 'package.json']
+
+export class CodeIntelligence extends EventEmitter {
   private readonly analyzers: ProjectAnalyzer[] = []
   private readonly cache = new Map<string, CacheEntry>()
+  private readonly watchers = new Map<string, FSWatcher[]>()
+  private readonly debounces = new Map<string, NodeJS.Timeout>()
 
   register(analyzer: ProjectAnalyzer): void {
     this.analyzers.push(analyzer)
@@ -46,11 +53,60 @@ export class CodeIntelligence {
     )
 
     this.cache.set(project.id, { results, fingerprint: fingerprintOf(results) })
+    this.watchProject(project)
     return results
   }
 
   invalidate(projectId: string): void {
     this.cache.delete(projectId)
+  }
+
+  /**
+   * The mtime fingerprint only invalidates when someone asks again, so an open
+   * Insights tab would show a stale diagram indefinitely. Watching the sources
+   * lets the main process tell the renderer to re-analyze.
+   */
+  private watchProject(project: Project): void {
+    if (this.watchers.has(project.id)) return
+
+    const watchers: FSWatcher[] = []
+    for (const entry of WATCHED) {
+      const target = join(project.path, entry)
+      if (!existsSync(target)) continue
+      try {
+        watchers.push(
+          watch(target, { recursive: true }, () => this.onSourceChanged(project.id))
+        )
+      } catch {
+        // A directory we cannot watch is not worth failing the analysis over.
+      }
+    }
+    if (watchers.length) this.watchers.set(project.id, watchers)
+  }
+
+  /** Editors write in bursts; one save should not mean twenty re-analyses. */
+  private onSourceChanged(projectId: string): void {
+    clearTimeout(this.debounces.get(projectId))
+    this.debounces.set(
+      projectId,
+      setTimeout(() => {
+        this.debounces.delete(projectId)
+        this.cache.delete(projectId)
+        this.emit('invalidated', projectId)
+      }, 750)
+    )
+  }
+
+  unwatch(projectId: string): void {
+    for (const watcher of this.watchers.get(projectId) ?? []) watcher.close()
+    this.watchers.delete(projectId)
+    clearTimeout(this.debounces.get(projectId))
+    this.debounces.delete(projectId)
+    this.cache.delete(projectId)
+  }
+
+  stopAll(): void {
+    for (const id of [...this.watchers.keys()]) this.unwatch(id)
   }
 
   mermaid(results: AnalysisResult[], kind: 'erDiagram' | 'classDiagram'): string {

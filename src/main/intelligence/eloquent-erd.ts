@@ -11,6 +11,24 @@ import type {
 } from '../../shared/intelligence.js'
 import type { Project } from '../../shared/project.js'
 
+/**
+ * Eloquent models do not all extend `Model`. Laravel's own User extends
+ * Authenticatable, pivots extend Pivot, and plenty of apps extend a project
+ * base class. Missing these loses the most connected model in the app.
+ */
+const MODEL_BASES = [
+  'Model',
+  'Authenticatable',
+  'Pivot',
+  'MorphPivot',
+  'BaseModel',
+  'User'
+]
+
+const MODEL_CLASS = new RegExp(
+  `class\\s+\\w+\\s+extends\\s+(?:[\\w\\\\]*\\\\)?(?:${MODEL_BASES.join('|')})\\b`
+)
+
 const RELATION_METHODS: Record<string, RelationKind> = {
   hasOne: 'has-one',
   hasMany: 'has-many',
@@ -43,14 +61,17 @@ export class EloquentErdAnalyzer implements ProjectAnalyzer {
     const entities: Entity[] = []
     const relations: Relation[] = []
 
+    // app/Models is reachable from both roots; without deduping, every model
+    // there was parsed twice and emitted as two identical entities. The depth
+    // covers domain-style layouts such as app/Domains/<Area>/Models.
     const modelDirs = [join(dir, 'app', 'Models'), join(dir, 'app')].filter((d) => existsSync(d))
-    const modelFiles = modelDirs.flatMap((d) => phpFilesIn(d, 2))
+    const modelFiles = [...new Set(modelDirs.flatMap((d) => phpFilesIn(d, 4)))]
 
     const columnsByTable = await this.parseMigrations(join(dir, 'database', 'migrations'), sources)
 
     for (const file of modelFiles) {
       const src = await readFile(file, 'utf8')
-      if (!/class\s+\w+\s+extends\s+(\\?Illuminate\\Database\\Eloquent\\)?Model/.test(src)) continue
+      if (!MODEL_CLASS.test(src)) continue
 
       const name = src.match(/class\s+(\w+)/)?.[1]
       if (!name) continue
@@ -79,6 +100,12 @@ export class EloquentErdAnalyzer implements ProjectAnalyzer {
         const [, method, call, argsRaw] = match
         const kind = RELATION_METHODS[call as string]
         if (!kind) continue
+        // morphTo() has no single target by design — the related model is
+        // chosen at runtime from a *_type column. Reporting that as an
+        // unresolved target would be wrong, and it was the bulk of the
+        // warnings on real codebases.
+        if (call === 'morphTo') continue
+
         const target = (argsRaw ?? '').match(/(\w+)::class/)?.[1]
         if (!target) {
           warnings.push(`${name}::${method}() target could not be resolved`)
@@ -109,8 +136,11 @@ export class EloquentErdAnalyzer implements ProjectAnalyzer {
     for (const file of phpFilesIn(dir, 1)) {
       const src = await readFile(file, 'utf8')
       sources.push(file)
+      // `function (Blueprint $table): void {` is standard in modern Laravel;
+      // requiring `)` to be followed directly by `{` skipped those tables
+      // entirely and reported the model as having no columns.
       for (const create of src.matchAll(
-        /Schema::create\s*\(\s*['"](\w+)['"][\s\S]*?function\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}\s*\)/g
+        /Schema::create\s*\(\s*['"](\w+)['"][\s\S]*?function\s*\([^)]*\)\s*(?::\s*[\w\\|]+\s*)?\{([\s\S]*?)\n\s*\}\s*\)/g
       )) {
         const table = create[1] as string
         const body = create[2] ?? ''
@@ -119,7 +149,7 @@ export class EloquentErdAnalyzer implements ProjectAnalyzer {
           /\$table->(\w+)\s*\(\s*(?:['"](\w+)['"])?[^)]*\)([^;]*);/g
         )) {
           const [, type, colName, modifiers] = col
-          if (type === 'id') {
+          if (type === 'id' || type === 'bigIncrements' || type === 'increments') {
             fields.push({ name: colName ?? 'id', type: 'bigint', primary: true })
             continue
           }
