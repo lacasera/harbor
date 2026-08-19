@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { execFile as execFileCb, execFileSync } from 'node:child_process'
+import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
 import { HarborApp } from '../src/main/app.js'
 
@@ -8,26 +8,12 @@ const execFile = promisify(execFileCb)
 // Never open an auth dialog from a verification run.
 process.env.HARBOR_NO_PROMPT = '1'
 
-/**
- * LIVE HARBOR: these run against the real ~/.harbor. If the app is open, its
- * daemons are serving the user's sites and must not be restarted or stopped
- * from here.
- */
-function harborIsRunning(): boolean {
-  try {
-    return (
-      execFileSync('/bin/ps', ['-Ao', 'args='], { encoding: 'utf8' })
-        .split('\n')
-        .some((l) => /Harbor\.app\/Contents\/MacOS\/Harbor|electron .*out\/main/.test(l))
-    )
-  } catch {
-    return false
-  }
-}
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
 const results: Array<[string, boolean, string]> = []
-const step = (n: string, ok: boolean, d = ''): void => {
-  results.push([n, ok, d]); console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${n}${d ? ` — ${d}` : ''}`)
+const step = (name: string, ok: boolean, detail = ''): void => {
+  results.push([name, ok, detail])
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
 /**
@@ -38,7 +24,8 @@ const step = (n: string, ok: boolean, d = ''): void => {
  *   npm run verify:php
  *
  * Runs against the real ~/.harbor on unprivileged ports and restores every
- * setting it touches. Skips cleanly when no fpm project is parked.
+ * setting it touches. It deliberately never drives the app lifecycle: the
+ * daemons it finds may be serving the user's sites right now.
  */
 void (async () => {
   const harbor = new HarborApp()
@@ -50,10 +37,12 @@ void (async () => {
   try {
     // Bring the stack up on unprivileged ports.
     harbor.store.update((s) => { s.settings.httpPort = 8080; s.settings.httpsPort = 8443 })
-    if (harborIsRunning()) {
-      console.log('  ..   Harbor is running; not touching its daemons')
-    } else {
-      await harbor.start()
+    // Never call harbor.start() here. Its orphan reclaim exists for the app's
+    // own startup and will kill daemons that are serving right now — including
+    // ones the user depends on. Bring up only what this check needs.
+    await harbor.dns.start(original)
+    for (const p of harbor.projects.list().filter((x) => x.serveModel === 'fpm')) {
+      await harbor.projects.ensureFpmFor(p).catch(() => undefined)
     }
 
     // A root-owned master belongs to the user's real setup; this check runs
@@ -115,7 +104,8 @@ void (async () => {
     await harbor.projects.changeTld(original).catch(() => undefined)
     harbor.store.update((s) => { s.settings.tld = original; s.settings.httpPort = 80; s.settings.httpsPort = 443 })
     await harbor.dns.start(original).catch(() => undefined)
-    await harbor.shutdown().catch(() => undefined)
+    // Leave dnsmasq and the FPM pools up: they may be serving the user's sites.
+    harbor.store.flush()
   }
   const failed = results.filter(([, ok]) => !ok).length
   console.log(`\n${results.length - failed}/${results.length} passed`)

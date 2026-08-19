@@ -84,10 +84,42 @@ export class DnsmasqManager {
     return this.processes.findByOwner('system', 'dnsmasq') !== null
   }
 
+  /**
+   * PIDs of dnsmasq processes running against Harbor's own config file —
+   * including ones this instance did not spawn, which is the normal state
+   * after the app is relaunched or a script bows out. They must be stopped
+   * before a new pool can bind the port, and matching on our config path means
+   * this can never touch the user's own dnsmasq.
+   */
+  private async harborDnsmasqPids(): Promise<number[]> {
+    const config = this.configPath()
+    try {
+      const { stdout } = await execFile('/bin/ps', ['-Ao', 'pid=,args='])
+      return stdout
+        .split('\n')
+        .filter((l) => l.includes('dnsmasq') && l.includes(config))
+        .map((l) => Number(l.trim().split(/\s+/)[0]))
+        .filter((pid) => Number.isFinite(pid) && pid !== process.pid)
+    } catch {
+      return []
+    }
+  }
+
   async start(tld: string): Promise<void> {
     const binary = this.native.which('dnsmasq')
     if (!binary) throw new Error('dnsmasq is not installed — install it with: brew install dnsmasq')
     if (this.isRunning()) await this.stop()
+
+    // Also clear any Harbor dnsmasq this instance did not spawn; otherwise the
+    // new one silently loses the race for the port and never answers.
+    for (const pid of await this.harborDnsmasqPids()) {
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {
+        /* already gone */
+      }
+    }
+    await new Promise((r) => setTimeout(r, 300))
 
     const config = this.writeConfig(tld)
     await this.processes.spawn({
