@@ -1,3 +1,4 @@
+import { connect } from 'node:net'
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -36,8 +37,46 @@ export class PhpFpmManager {
     return this.php.fpmSocket(version)
   }
 
+  /**
+   * Whether this pool is usable — not merely whether *this* instance spawned
+   * it. Asking only about our own children reported a perfectly healthy pool
+   * as down whenever it was started by an earlier run, which then showed as
+   * "not served" on a site that serves fine.
+   */
   isRunning(version: string): boolean {
-    return this.processes.findByOwner('system', this.ownerId(version)) !== null
+    if (this.processes.findByOwner('system', this.ownerId(version)) !== null) return true
+    return this.socketAlive(version)
+  }
+
+  /**
+   * A socket file can outlive the pool that made it, so existence is not
+   * enough — try to connect. Local unix sockets make this effectively free.
+   */
+  private socketAlive(version: string): boolean {
+    const socket = this.socketPath(version)
+    if (!existsSync(socket)) return false
+
+    const cached = this.aliveCache.get(socket)
+    if (cached && Date.now() - cached.at < 3000) return cached.value
+    // Kick off a probe for the next caller; report existence meanwhile.
+    void this.probeSocket(socket)
+    return cached?.value ?? true
+  }
+
+  private readonly aliveCache = new Map<string, { value: boolean; at: number }>()
+
+  private probeSocket(socket: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const client = connect(socket)
+      const settle = (value: boolean): void => {
+        this.aliveCache.set(socket, { value, at: Date.now() })
+        client.destroy()
+        resolve(value)
+      }
+      client.once('connect', () => settle(true))
+      client.once('error', () => settle(false))
+      setTimeout(() => settle(false), 500)
+    })
   }
 
   /** Write a pool tuned for local development. */

@@ -9,7 +9,7 @@
  * /etc/resolver file. Requests are sent with an explicit Host header, which
  * verifies everything up to and including nginx's server_name routing.
  */
-import { execFile as execFileCb, spawn } from 'node:child_process'
+import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,6 +21,23 @@ const execFile = promisify(execFileCb)
 
 // Never open an auth dialog from a verification run.
 process.env.HARBOR_NO_PROMPT = '1'
+
+/**
+ * LIVE HARBOR: these run against the real ~/.harbor. If the app is open, its
+ * daemons are serving the user's sites and must not be restarted or stopped
+ * from here.
+ */
+function harborIsRunning(): boolean {
+  try {
+    return (
+      execFileSync('/bin/ps', ['-Ao', 'args='], { encoding: 'utf8' })
+        .split('\n')
+        .some((l) => /Harbor\.app\/Contents\/MacOS\/Harbor|electron .*out\/main/.test(l))
+    )
+  } catch {
+    return false
+  }
+}
 const NGINX = '/opt/homebrew/bin/nginx'
 
 /**
@@ -76,6 +93,10 @@ const step = (name: string, ok: boolean, detail = ''): void => {
 }
 
 async function main(): Promise<void> {
+  if (harborIsRunning()) {
+    console.log('  ..   Harbor is running; skipping (it owns the daemons this would restart)')
+    process.exit(0)
+  }
   const harbor = new HarborApp()
   const dir = makeExpressApp()
   const HTTP_PORT = await freePort()

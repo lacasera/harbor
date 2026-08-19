@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { execFile as execFileCb } from 'node:child_process'
+import { execFile as execFileCb, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { HarborApp } from '../src/main/app.js'
 
@@ -7,6 +7,23 @@ const execFile = promisify(execFileCb)
 
 // Never open an auth dialog from a verification run.
 process.env.HARBOR_NO_PROMPT = '1'
+
+/**
+ * LIVE HARBOR: these run against the real ~/.harbor. If the app is open, its
+ * daemons are serving the user's sites and must not be restarted or stopped
+ * from here.
+ */
+function harborIsRunning(): boolean {
+  try {
+    return (
+      execFileSync('/bin/ps', ['-Ao', 'args='], { encoding: 'utf8' })
+        .split('\n')
+        .some((l) => /Harbor\.app\/Contents\/MacOS\/Harbor|electron .*out\/main/.test(l))
+    )
+  } catch {
+    return false
+  }
+}
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const results: Array<[string, boolean, string]> = []
 const step = (n: string, ok: boolean, d = ''): void => {
@@ -33,7 +50,11 @@ void (async () => {
   try {
     // Bring the stack up on unprivileged ports.
     harbor.store.update((s) => { s.settings.httpPort = 8080; s.settings.httpsPort = 8443 })
-    await harbor.start()
+    if (harborIsRunning()) {
+      console.log('  ..   Harbor is running; not touching its daemons')
+    } else {
+      await harbor.start()
+    }
 
     // A root-owned master belongs to the user's real setup; this check runs
     // unprivileged and must not try to restart it.

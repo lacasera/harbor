@@ -175,6 +175,10 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
     await harbor.dns.stop()
     return harbor.dns.status(tld())
   })
+  handle('dns:flush', async () => {
+    await harbor.dns.flushDnsCache()
+    return harbor.dns.status(tld())
+  })
   handle('dns:configureResolver', async () => {
     await harbor.dns.configureResolver(tld())
     return harbor.dns.status(tld())

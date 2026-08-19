@@ -10,6 +10,13 @@ import { paths } from '../core/paths.js'
 const execFile = promisify(execFileCb)
 
 /**
+ * Both halves are needed: dscacheutil clears the DirectoryService cache, and
+ * only a SIGHUP to mDNSResponder clears the one that actually holds the stale
+ * negative answers.
+ */
+const FLUSH_COMMANDS = ['dscacheutil -flushcache', 'killall -HUP mDNSResponder']
+
+/**
  * `*.<tld>` → 127.0.0.1.
  *
  * dnsmasq runs **unprivileged on a high port** rather than as root on 53: the
@@ -94,6 +101,10 @@ export class DnsmasqManager {
 
     // A spawned process is not yet a listening one. Returning before the
     // socket is bound makes the very next query fail for no real reason.
+    // Cheap, needs no password, and covers the common case of a name that was
+    // looked up moments before dnsmasq came up.
+    await this.flushDnsCacheUnprivileged()
+
     if (!(await this.waitUntilResolving(tld))) {
       // Almost always something else already on the port — most often a
       // dnsmasq orphaned by a previous Harbor that was force-quit.
@@ -124,12 +135,32 @@ export class DnsmasqManager {
     return existsSync(this.resolverPath(tld))
   }
 
-  /** The one privileged step. Writes /etc/resolver/<tld> in a single prompt. */
+  /**
+   * The one privileged step. Writes /etc/resolver/<tld> and flushes the DNS
+   * cache in a single prompt.
+   *
+   * The flush is not optional. macOS caches negative lookups in mDNSResponder,
+   * and `dscacheutil -flushcache` alone no longer clears them — so a name that
+   * was queried before Harbor owned the suffix stays unresolvable, with the
+   * resolver file correct and dnsmasq answering that exact name when asked
+   * directly. It looks like a DNS bug and is a stale cache.
+   */
   async configureResolver(tld: string): Promise<void> {
     await this.privileged.runAll([
       'mkdir -p /etc/resolver',
-      `printf 'nameserver 127.0.0.1\\nport ${this.port}\\n' > ${this.resolverPath(tld)}`
+      `printf 'nameserver 127.0.0.1\\nport ${this.port}\\n' > ${this.resolverPath(tld)}`,
+      ...FLUSH_COMMANDS
     ])
+  }
+
+  /** Clear the macOS resolver caches. Needs root for the mDNSResponder half. */
+  async flushDnsCache(): Promise<void> {
+    await this.privileged.runAll(FLUSH_COMMANDS)
+  }
+
+  /** The half that needs no password, for use after an ordinary restart. */
+  async flushDnsCacheUnprivileged(): Promise<void> {
+    await execFile('/usr/bin/dscacheutil', ['-flushcache']).catch(() => undefined)
   }
 
   async removeResolver(tld: string): Promise<void> {

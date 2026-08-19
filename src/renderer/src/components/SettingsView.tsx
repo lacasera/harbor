@@ -80,7 +80,14 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
 
   /** Run a setup action and fold its returned status back into view state. */
   const act = (
-    channel: 'tls:install' | 'tls:installCa' | 'dns:install' | 'dns:start' | 'dns:stop' | 'dns:configureResolver',
+    channel:
+      | 'tls:install'
+      | 'tls:installCa'
+      | 'dns:install'
+      | 'dns:start'
+      | 'dns:stop'
+      | 'dns:configureResolver'
+      | 'dns:flush',
     apply: (next: TlsStatus | DnsStatus) => void
   ): void => {
     setBusy(true)
@@ -273,6 +280,20 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
               busy={busy}
               onRun={() =>
                 act('dns:configureResolver', (next) =>
+                  setStatus((s) => (s ? { ...s, dns: next as DnsStatus } : s))
+                )
+              }
+            />
+
+            <Step
+              label="Resolver cache"
+              hint="macOS keeps failed lookups; a name tried before Harbor owned the suffix stays unresolvable until this is cleared"
+              ok
+              detail="cleared automatically when the resolver is written"
+              action="Flush now…"
+              busy={busy}
+              onRun={() =>
+                act('dns:flush', (next) =>
                   setStatus((s) => (s ? { ...s, dns: next as DnsStatus } : s))
                 )
               }

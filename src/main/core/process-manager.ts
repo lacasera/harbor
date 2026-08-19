@@ -175,7 +175,7 @@ export class ProcessManager extends EventEmitter {
    */
   static async reclaimOrphans(harborHome: string): Promise<number> {
     const listing = await new Promise<string>((resolve) => {
-      const ps = spawn('/bin/ps', ['-Ao', 'pid=,args='])
+      const ps = spawn('/bin/ps', ['-Ao', 'pid=,ppid=,args='])
       let buf = ''
       ps.stdout.setEncoding('utf8')
       ps.stdout.on('data', (c: string) => (buf += c))
@@ -191,8 +191,16 @@ export class ProcessManager extends EventEmitter {
       // shells that merely mention the path.
       if (!/\b(dnsmasq|php-fpm)\b/.test(trimmed)) continue
 
-      const pid = Number(trimmed.split(/\s+/)[0])
+      const [pidText, ppidText] = trimmed.split(/\s+/)
+      const pid = Number(pidText)
+      const ppid = Number(ppidText)
       if (!Number.isFinite(pid) || pid === process.pid) continue
+
+      // Orphans only. A daemon whose parent is still alive belongs to a
+      // running Harbor — killing it takes down that instance's sites, which
+      // is precisely what this was meant to prevent, not cause.
+      if (ppid !== 1) continue
+
       try {
         process.kill(pid, 'SIGTERM')
         killed++

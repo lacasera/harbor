@@ -136,6 +136,8 @@ export interface IpcContract {
   'dns:stop': [[], DnsStatus]
   /** Writes /etc/resolver/<tld>. The only privileged step in DNS setup. */
   'dns:configureResolver': [[], DnsStatus]
+  /** Clear macOS resolver caches; stale negatives survive a dnsmasq restart. */
+  'dns:flush': [[], DnsStatus]
 
   'nginx:status': [[], NginxStatus]
   'nginx:reload': [[], void]
