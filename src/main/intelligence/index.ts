@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { AnalysisResult, ProjectAnalyzer } from '../../shared/intelligence.js'
 import type { Project } from '../../shared/project.js'
 import { EloquentErdAnalyzer } from './eloquent-erd.js'
+import { DoctrineErdAnalyzer } from './doctrine-erd.js'
 import { ComposerDepsAnalyzer, NodeDepsAnalyzer } from './deps.js'
 import { toClassDiagram, toErDiagram } from './mermaid.js'
 
@@ -143,6 +144,7 @@ function fingerprintOf(results: AnalysisResult[]): Map<string, number> {
 export function createCodeIntelligence(): CodeIntelligence {
   const intel = new CodeIntelligence()
   intel.register(new EloquentErdAnalyzer())
+  intel.register(new DoctrineErdAnalyzer())
   intel.register(new NodeDepsAnalyzer())
   intel.register(new ComposerDepsAnalyzer())
   return intel

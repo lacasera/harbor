@@ -18,6 +18,7 @@ import { createPhpFrameworkRegistry } from '../src/main/projects/php-frameworks/
 import { interpolate, defaultsFor, validate } from '../src/main/services/registry.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
 import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent-erd.js'
+import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
 import { MinioDriver } from '../src/main/services/minio.js'
@@ -312,6 +313,97 @@ return new class () extends Migration {
 
   const known = new Set(result.entities.map((e) => e.id))
   assert.ok(result.relations.every((r) => known.has(r.to)), 'no dangling relation targets')
+})
+
+check('the Doctrine analyzer reads PHP 8 attribute mapping', () => {
+  const src = `<?php
+namespace App\\Entity;
+use Doctrine\\DBAL\\Types\\Types;
+use Doctrine\\ORM\\Mapping as ORM;
+
+#[ORM\\Entity(repositoryClass: PostRepository::class)]
+#[ORM\\Table(name: 'symfony_demo_post')]
+class Post
+{
+    #[ORM\\Id]
+    #[ORM\\GeneratedValue]
+    #[ORM\\Column(type: Types::INTEGER)]
+    private ?int $id = null;
+
+    #[ORM\\Column(type: Types::STRING)]
+    private ?string $title = null;
+
+    #[ORM\\Column(nullable: true)]
+    private \\DateTimeImmutable $publishedAt;
+
+    #[ORM\\ManyToOne(targetEntity: User::class)]
+    private ?User $author = null;
+
+    #[ORM\\OneToMany(targetEntity: Comment::class, mappedBy: 'post')]
+    private Collection $comments;
+
+    #[ORM\\ManyToMany(targetEntity: Tag::class)]
+    private Collection $tags;
+}
+`
+  const parsed = parseEntity('Post', src)
+  assert.equal(parsed.table, 'symfony_demo_post')
+  assert.deepEqual(
+    parsed.fields.map((f) => f.name),
+    ['id', 'title', 'published_at']
+  )
+  assert.equal(parsed.fields[0]?.primary, true)
+  assert.equal(parsed.fields[1]?.type, 'string')
+  // No explicit type: Doctrine infers from the hint, displayed without its namespace.
+  assert.equal(parsed.fields[2]?.type, 'DateTimeImmutable')
+  assert.equal(parsed.fields[2]?.nullable, true)
+
+  assert.deepEqual(
+    parsed.relations.map((r) => `${r.kind}:${r.to}`),
+    ['belongs-to:User', 'has-many:Comment', 'many-to-many:Tag']
+  )
+  assert.deepEqual(parsed.warnings, [])
+})
+
+check('the Doctrine analyzer still reads legacy docblock annotations', () => {
+  const src = `<?php
+/**
+ * @ORM\\Entity()
+ * @ORM\\Table(name="legacy_order")
+ */
+class Order
+{
+    /**
+     * @ORM\\Id
+     * @ORM\\Column(type="integer")
+     */
+    private $id;
+
+    /** @ORM\\Column(name="placed_at", type="datetime", nullable=true) */
+    private $placedAt;
+
+    /** @ORM\\ManyToOne(targetEntity="App\\Entity\\Customer") */
+    private $customer;
+}
+`
+  const parsed = parseEntity('Order', src)
+  assert.equal(parsed.table, 'legacy_order')
+  assert.deepEqual(
+    parsed.fields.map((f) => `${f.name}:${f.type}`),
+    ['id:integer', 'placed_at:datetime']
+  )
+  assert.equal(parsed.fields[1]?.nullable, true)
+  // A fully-qualified target keys on the short name, like the entity list does.
+  assert.deepEqual(
+    parsed.relations.map((r) => `${r.kind}:${r.to}`),
+    ['belongs-to:Customer']
+  )
+})
+
+check('Doctrine falls back to a conventional table name', () => {
+  assert.equal(snakeCase('BlogPost'), 'blog_post')
+  const parsed = parseEntity('BlogPost', '<?php\n#[ORM\\Entity]\nclass BlogPost {}\n')
+  assert.equal(parsed.table, 'blog_post')
 })
 
 check('mermaid ERD drops relations to unparsed models', () => {

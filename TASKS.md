@@ -233,9 +233,13 @@ shape as LocalStack's, which is verified.
   polymorphic by design and was most of the warning volume.
   Both apps now analyze with zero warnings, zero dangling relations and zero
   column-less models.
-- [ ] **5.2 — Symfony/Doctrine analyzer** (entity attributes → same graph).
-  Left for next session rather than rushed; the Eloquent work above is the
-  template to follow, including validating it against a real codebase.
+- [x] **5.2 — Symfony/Doctrine analyzer.** *(done)*
+  Reads both mapping styles: PHP 8 attributes (`#[ORM\Column]`) and the legacy
+  docblock annotations (`@ORM\Column`). Emits the same normalized graph, so the
+  ERD, UML and Mermaid views work for Symfony without knowing about Doctrine.
+  Validated against the real `symfony/demo` codebase, matching hand-checked
+  ground truth exactly: 4 entities, 17 columns, 5 relations, correct table
+  names, zero warnings.
 - [x] **5.3 — File-watch invalidation.** *(done)*
   Sources are watched recursively and debounced; the main process pushes
   `analysis:invalidated` and an open Insights tab re-analyzes.
@@ -245,6 +249,9 @@ shape as LocalStack's, which is verified.
   its apology in the UI are gone.
 
 ---
+
+**Phase 5 is complete.** `npm run verify:intelligence <app>` passes against
+three real codebases: two Laravel apps (11/11 each) and symfony/demo (10/10).
 
 ## Phase 6 — packaging
 

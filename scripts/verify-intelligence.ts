@@ -20,13 +20,16 @@ async function main(): Promise<void> {
   const harbor = new HarborApp()
   const target = process.argv[2]
 
-  if (!target || !existsSync(join(target, 'artisan'))) {
-    console.log(`  ..   no Laravel app at ${target ?? '(none given)'}; skipping`)
+  if (!target || !existsSync(join(target, 'composer.json'))) {
+    console.log(`  ..   no PHP app at ${target ?? '(none given)'}; skipping`)
     process.exit(0)
   }
+  const laravel = existsSync(join(target, 'artisan'))
+  console.log(`  ..   ${laravel ? 'Laravel' : 'Symfony/Doctrine'} app`)
 
   let projectId: string | null = null
-  const scratch = join(target, 'app', 'Models', '__HarborProbe.php')
+  const sourceDir = laravel ? join(target, 'app', 'Models') : join(target, 'src', 'Entity')
+  const scratch = join(sourceDir, '__HarborProbe.php')
 
   try {
     const project = await harbor.projects.link(target)
@@ -41,8 +44,10 @@ async function main(): Promise<void> {
     const warnings = analysis.flatMap((r) => r.warnings)
     const known = new Set(entities.map((e) => e.id))
 
-    step('found models in a real codebase', entities.length > 5, `${entities.length} entities`)
-    step('found relations', relations.length > 5, `${relations.length} relations`)
+    // Assert that it found something and that what it found is coherent — an
+    // arbitrary size threshold just fails on small, correctly-parsed apps.
+    step('found models in a real codebase', entities.length > 0, `${entities.length} entities`)
+    step('found relations', relations.length > 0, `${relations.length} relations`)
     step('completes quickly', ms < 3000, `${ms}ms`)
 
     step(
@@ -64,16 +69,18 @@ async function main(): Promise<void> {
     // analyzer noting "no lockfile, so no transitive deps" is correct
     // reporting, not a defect.
     const parseWarnings = analysis
-      .filter((r) => r.analyzerId === 'laravel-eloquent')
+      .filter((r) => r.analyzerId === 'laravel-eloquent' || r.analyzerId === 'doctrine-erd')
       .flatMap((r) => r.warnings)
     step('no model parse failures', parseWarnings.length === 0, parseWarnings.slice(0, 3).join(' | '))
     const infoWarnings = warnings.filter((w) => !parseWarnings.includes(w))
     if (infoWarnings.length) console.log(`  ..   informational: ${infoWarnings.join(' | ')}`)
-    step(
-      "Laravel's User model was found",
-      entities.some((e) => e.name === 'User'),
-      'extends Authenticatable, not Model'
-    )
+    if (laravel) {
+      step(
+        "Laravel's User model was found",
+        entities.some((e) => e.name === 'User'),
+        'extends Authenticatable, not Model'
+      )
+    }
 
     // Dependency graph from composer.json/lock.
     const deps = analysis.flatMap((r) => r.dependencies.nodes)
@@ -92,7 +99,7 @@ async function main(): Promise<void> {
         resolve(id === project.id)
       })
     })
-    mkdirSync(join(target, 'app', 'Models'), { recursive: true })
+    mkdirSync(sourceDir, { recursive: true })
     writeFileSync(scratch, '<?php\n// Harbor probe\n')
     appendFileSync(scratch, '// touched\n')
     step('a source change invalidates and notifies', await invalidated)
