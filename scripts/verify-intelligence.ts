@@ -31,9 +31,17 @@ async function main(): Promise<void> {
   const sourceDir = laravel ? join(target, 'app', 'Models') : join(target, 'src', 'Entity')
   const scratch = join(sourceDir, '__HarborProbe.php')
 
+  // link() returns the existing project when the path is already parked, so
+  // forgetting unconditionally in cleanup would delete one of the user's real
+  // projects. Only remove what this script created.
+  const preexisting = harbor.projects.list().find((p) => p.path === target)
+  let createdHere = false
+
   try {
-    const project = await harbor.projects.link(target)
+    const project = preexisting ?? (await harbor.projects.link(target))
+    createdHere = !preexisting
     projectId = project.id
+    if (preexisting) console.log('  ..   already parked — will be left in place')
 
     const t0 = Date.now()
     const analysis = await harbor.intelligence.analyze(harbor.projects.find(project.id), true)
@@ -106,7 +114,7 @@ async function main(): Promise<void> {
     await wait(200)
   } finally {
     rmSync(scratch, { force: true })
-    if (projectId) await harbor.projects.forget(projectId).catch(() => undefined)
+    if (projectId && createdHere) await harbor.projects.forget(projectId).catch(() => undefined)
     await harbor.shutdown().catch(() => undefined)
   }
 

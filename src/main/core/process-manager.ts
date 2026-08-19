@@ -168,9 +168,10 @@ export class ProcessManager extends EventEmitter {
   startUsagePolling(intervalMs = 4000): void {
     if (this.usageTimer) return
     this.usageTimer = setInterval(() => {
-      void this.sampleUsage().then((samples) => {
-        if (samples.length) this.emit('usage', samples)
-      })
+      // Emit even when empty. Suppressing the empty case left the last
+      // non-zero reading on screen after everything stopped, which reads as a
+      // stuck meter rather than an idle one.
+      void this.sampleUsage().then((samples) => this.emit('usage', samples))
     }, intervalMs)
   }
 

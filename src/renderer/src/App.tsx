@@ -126,9 +126,10 @@ export function App(): React.JSX.Element {
   )
 
   const totals = useMemo(() => {
+    if (!usage.length) return { cpu: '—', ram: '—' }
     const cpu = usage.reduce((n, u) => n + u.cpu, 0)
     const mem = usage.reduce((n, u) => n + u.memory, 0)
-    return { cpu: `${cpu.toFixed(1)}%`, ram: mem ? formatBytes(mem) : '0 MB' }
+    return { cpu: `${cpu.toFixed(1)}%`, ram: mem ? formatBytes(mem) : '—' }
   }, [usage])
 
   const project = route.name === 'project' ? projects.find((p) => p.id === route.id) : undefined
@@ -148,7 +149,10 @@ export function App(): React.JSX.Element {
         <Sidebar
           route={route}
           onNavigate={setRoute}
-          counts={{ projects: runningProjects.length, services: runningServices.length }}
+          counts={{
+            projects: { total: projects.length, running: runningProjects.length },
+            services: { total: services.length, running: runningServices.length }
+          }}
           running={running}
           version={app.version}
         />

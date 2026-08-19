@@ -97,6 +97,8 @@ export interface IpcContract {
         runtimeOverride?: { runtime: RuntimeId; version: string } | null
         secure?: boolean
         serviceIds?: string[]
+        /** Re-run detection and drop any manual type override. */
+        redetectType?: boolean
       }
     ],
     ProjectDescriptor

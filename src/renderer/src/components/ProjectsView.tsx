@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { ProjectDescriptor } from '../../../shared/project.js'
 import { invoke } from '../ipc/client.js'
-import { CopyIconButton, StatusDot, tintFor, useCopy } from './primitives.js'
+import { CopyIconButton, StatusDot, useCopy } from './primitives.js'
+import { TypeIcon, typeLabel } from './TypeIcon.js'
 
 export function ProjectsView({
   projects,
@@ -17,6 +18,23 @@ export function ProjectsView({
   const { copied, copy } = useCopy()
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Two-step rather than a modal: removing a project is reversible (re-park
+  // it) but silently losing one to a stray click is not acceptable either.
+  const [confirming, setConfirming] = useState<string | null>(null)
+
+  const forget = async (id: string): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      await invoke('projects:forget', id)
+      setConfirming(null)
+      onReload()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const pick = async (mode: 'park' | 'link'): Promise<void> => {
     const dir = await invoke('projects:chooseDirectory')
@@ -129,8 +147,12 @@ export function ProjectsView({
 
                 <div>
                   <span className="pill">
-                    <span className="square" style={{ background: tintFor(project.typeId) }} />
-                    {project.typeId}
+                    <TypeIcon
+                      frameworkId={project.frameworkId}
+                      typeId={project.typeId}
+                      size={13}
+                    />
+                    {typeLabel(project.frameworkId, project.typeId)}
                   </span>
                 </div>
 
@@ -147,7 +169,48 @@ export function ProjectsView({
                   {project.secure ? 'TLS on' : 'TLS off'}
                 </div>
 
-                <div className="chev">›</div>
+                <div className="row-end">
+                  {confirming === project.id ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn xs danger"
+                        disabled={busy}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void forget(project.id)
+                        }}
+                      >
+                        Remove
+                      </button>
+                      <button
+                        type="button"
+                        className="btn xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setConfirming(null)
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="icon-btn forget"
+                        title="Remove from Harbor"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setConfirming(project.id)
+                        }}
+                      >
+                        ×
+                      </button>
+                      <span className="chev">›</span>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
           </div>

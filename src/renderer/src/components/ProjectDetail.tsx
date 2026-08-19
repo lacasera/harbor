@@ -7,6 +7,7 @@ import type { LogLine } from '../../../shared/logs.js'
 import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import type { ProjectTab } from '../routes.js'
 import { invoke, subscribe } from '../ipc/client.js'
+import { TypeIcon, typeLabel } from './TypeIcon.js'
 import {
   CopyIconButton,
   StatusDot,
@@ -16,13 +17,19 @@ import {
   formatUptime,
   processForOwner,
   statusOf,
-  tintFor,
   useCopy,
   usageForOwner
 } from './primitives.js'
 import { EnvLines, toRows, toText } from './EnvBlock.js'
 import { Insights } from './Insights.js'
 import { LogRows } from './LogsView.js'
+
+/** Kept beside the UI that offers them; the main process is the authority. */
+const PROJECT_TYPES = [
+  { id: 'php', label: 'PHP' },
+  { id: 'node-server', label: 'Node server' },
+  { id: 'static', label: 'Static site' }
+]
 
 export function ProjectDetail({
   project,
@@ -50,6 +57,7 @@ export function ProjectDetail({
   const [tab, setTab] = useState<ProjectTab>('overview')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmForget, setConfirmForget] = useState(false)
   const { copied, copy } = useCopy()
 
   const run = async (fn: () => Promise<ProjectDescriptor>): Promise<void> => {
@@ -88,10 +96,10 @@ export function ProjectDetail({
               <StatusDot status={project.running ? 'running' : 'stopped'} />
               <span className="page-title">{project.name}</span>
               <span className="pill">
-                <span className="square" style={{ background: tintFor(project.typeId) }} />
-                {project.typeId}
+                <TypeIcon frameworkId={project.frameworkId} typeId={project.typeId} size={13} />
+                {typeLabel(project.frameworkId, project.typeId)}
               </span>
-              {project.frameworkId && <span className="pill mono">{project.frameworkId}</span>}
+              <span className="pill mono">{project.serveModel}</span>
             </div>
             <div className="hstack" style={{ gap: 6, marginTop: 6, paddingLeft: 17 }}>
               <a className="mono" style={{ fontSize: 12.5 }} href={project.url} target="_blank" rel="noreferrer">
@@ -125,6 +133,31 @@ export function ProjectDetail({
                 }
               >
                 {project.running ? 'Stop' : 'Start'}
+              </button>
+            )}
+            {confirmForget ? (
+              <>
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true)
+                    void invoke('projects:forget', project.id)
+                      .then(onBack)
+                      .catch((err: Error) => setError(err.message))
+                      .finally(() => setBusy(false))
+                  }}
+                >
+                  Remove {project.name}
+                </button>
+                <button type="button" className="btn" onClick={() => setConfirmForget(false)}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button type="button" className="btn" onClick={() => setConfirmForget(true)}>
+                Forget project
               </button>
             )}
           </div>
@@ -211,6 +244,8 @@ function Overview({
   copied: string | null
   copy: (text: string, key: string) => void
   onPatch: (patch: {
+    typeId?: string
+    redetectType?: boolean
     runtimeOverride?: { runtime: string; version: string } | null
     secure?: boolean
     serviceIds?: string[]
@@ -268,13 +303,33 @@ function Overview({
         </div>
 
         <div className="row">
-          <div className="k">Detected type</div>
-          <div className="v" style={{ fontSize: 12.5 }}>
-            {project.typeId}
-            <span className="small muted">
-              — {project.typeOverridden ? 'set manually' : 'auto-detected on park'}
-              {project.frameworkId && `, ${project.frameworkId} driver`}
-            </span>
+          <div>
+            <div className="k">Project type</div>
+            <div className="hint">Decides how nginx serves it</div>
+          </div>
+          <div className="v">
+            <select
+              className="field-select"
+              style={{ minWidth: 150 }}
+              disabled={busy}
+              value={project.typeId}
+              onChange={(e) => onPatch({ typeId: e.target.value })}
+            >
+              {PROJECT_TYPES.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+            {project.typeOverridden ? (
+              <button type="button" className="btn xs" disabled={busy} onClick={() => onPatch({ redetectType: true })}>
+                Re-detect
+              </button>
+            ) : (
+              <span className="small muted">
+                auto-detected{project.frameworkId ? `, ${project.frameworkId} driver` : ''}
+              </span>
+            )}
           </div>
         </div>
 

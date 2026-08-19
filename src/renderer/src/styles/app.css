@@ -699,7 +699,7 @@
 }
 .project-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1.2fr) minmax(220px, 1.1fr) 110px 128px 64px 26px;
+  grid-template-columns: minmax(200px, 1.2fr) minmax(220px, 1.1fr) 118px 128px 64px 92px;
   align-items: center;
   gap: 16px;
   padding: 13px 16px;
@@ -746,8 +746,28 @@
   white-space: nowrap;
 }
 .project-row .chev {
-  text-align: right;
   color: var(--tx3);
+}
+.project-row .row-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* Muted until the row is under the pointer, but never invisible — an action
+   you cannot find is the same as one that does not exist. */
+.project-row .icon-btn.forget {
+  opacity: 0.4;
+  font-size: 13px;
+  line-height: 1;
+}
+.project-row:hover .icon-btn.forget,
+.project-row .icon-btn.forget:focus-visible {
+  opacity: 1;
+}
+.project-row .icon-btn.forget:hover {
+  color: var(--rd);
+  border-color: var(--rd);
 }
 
 /* ── services ───────────────────────────────────────────────────────────── */

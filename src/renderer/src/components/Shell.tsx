@@ -95,6 +95,13 @@ export function TitleBar({
   )
 }
 
+export interface NavCount {
+  /** How many exist — what a badge beside a section name should mean. */
+  total: number
+  /** How many are running — carried by the dot's colour, not the number. */
+  running: number
+}
+
 export function Sidebar({
   route,
   onNavigate,
@@ -104,7 +111,7 @@ export function Sidebar({
 }: {
   route: Route
   onNavigate: (route: Route) => void
-  counts: { projects: number; services: number }
+  counts: { projects: NavCount; services: NavCount }
   running: RunningEntry[]
   version: string
 }): React.JSX.Element {
@@ -112,7 +119,7 @@ export function Sidebar({
   const active =
     route.name === 'project' ? 'projects' : route.name === 'service' ? 'services' : route.name
 
-  const items: Array<{ id: Route['name']; label: string; count: number | null }> = [
+  const items: Array<{ id: Route['name']; label: string; count: NavCount | null }> = [
     { id: 'projects', label: 'Projects', count: counts.projects },
     { id: 'services', label: 'Services', count: counts.services },
     { id: 'runtimes', label: 'Runtimes', count: null },
@@ -134,9 +141,12 @@ export function Sidebar({
             <NavIcon id={item.id} />
             <span className="label">{item.label}</span>
             {item.count !== null && (
-              <span className="nav-count">
-                {item.count}
-                <StatusDot status={item.count ? 'running' : 'stopped'} small />
+              <span
+                className="nav-count"
+                title={`${item.count.total} total · ${item.count.running} running`}
+              >
+                {item.count.total}
+                <StatusDot status={item.count.running ? 'running' : 'stopped'} small />
               </span>
             )}
           </button>

@@ -93,6 +93,11 @@ async function main(): Promise<void> {
       s.settings.httpsPort = 8443
     })
 
+    // Always a fresh temp directory, so this never adopts a real project —
+    // asserted rather than assumed.
+    if (harbor.projects.list().some((p) => p.path === dir)) {
+      throw new Error('refusing to run: the scratch path is already a parked project')
+    }
     const project = await harbor.projects.link(dir)
     projectId = project.id
     step(

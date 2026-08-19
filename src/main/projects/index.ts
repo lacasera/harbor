@@ -215,9 +215,24 @@ export class ProjectManager extends EventEmitter {
       runtimeOverride?: { runtime: RuntimeId; version: string } | null
       secure?: boolean
       serviceIds?: string[]
+      redetectType?: boolean
     }
   ): Promise<ProjectDescriptor> {
     const project = this.find(id)
+
+    // Detection is a convenience, not a contract — but a wrong override has to
+    // be undoable, or the project is stuck serving the wrong model forever.
+    if (patch.redetectType) {
+      const detected = await this.detectType(project.path)
+      project.typeId = detected.id
+      project.typeOverridden = false
+      project.serveModel = detected.serveModel
+      project.frameworkId =
+        detected.serveModel === 'fpm' ? (await this.frameworks.detect(project.path)).id : null
+      if (detected.serveModel === 'reverse-proxy' && !project.port) {
+        project.port = await this.deps.ports.allocate(`project:${id}`, detected.defaultPort)
+      }
+    }
 
     if (patch.typeId && patch.typeId !== project.typeId) {
       const type = this.typeById(patch.typeId)
