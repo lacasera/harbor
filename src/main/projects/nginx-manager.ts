@@ -322,6 +322,61 @@ export class NginxManager {
     await this.reload()
   }
 
+  /** The user the running master belongs to, or null when it isn't running. */
+  private async masterUser(): Promise<string | null> {
+    try {
+      const { stdout } = await exec('/usr/bin/pgrep -x nginx')
+      const pid = stdout.trim().split('\n')[0]
+      if (!pid) return null
+      const { stdout: owner } = await exec(`/bin/ps -o user= -p ${pid}`)
+      return owner.trim() || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Ports below 1024 can only be bound by root, so a site on :443 needs a root
+   * master. Above that Harbor can run nginx as the user and never prompt.
+   */
+  private needsRoot(ports: number[]): boolean {
+    return ports.some((p) => p < 1024)
+  }
+
+  async start(ports: { httpPort: number; httpsPort: number }): Promise<void> {
+    const binary = this.native.which('nginx')
+    if (!binary) throw new Error('nginx is not installed — install it with: brew install nginx')
+
+    const check = await this.test()
+    if (!check.ok) throw new Error(`nginx config test failed: ${check.output}`)
+
+    if (this.needsRoot([ports.httpPort, ports.httpsPort])) {
+      await this.privileged.run(binary)
+    } else {
+      await exec(binary)
+    }
+  }
+
+  async stop(): Promise<void> {
+    const binary = this.native.which('nginx')
+    if (!binary) return
+    const owner = await this.masterUser()
+    if (!owner) return
+    if (owner === 'root') await this.privileged.run(`${binary} -s stop`)
+    else await exec(`${binary} -s stop`).catch(() => undefined)
+    // Give the master a moment to release its listeners before a restart.
+    await new Promise((r) => setTimeout(r, 600))
+  }
+
+  /**
+   * A running master holds the listeners it was started with; a reload will not
+   * move it from :8080 to :80. Changing ports means a full restart.
+   */
+  async restart(ports: { httpPort: number; httpsPort: number }): Promise<void> {
+    await this.stop()
+    await this.start(ports)
+  }
+
   async status(): Promise<{
     installed: boolean
     running: boolean
@@ -329,6 +384,10 @@ export class NginxManager {
     configPath: string | null
     harborConfig: string
     strategy: 'drop-in' | 'config-edit' | null
+    /** The user the master runs as; root is required to bind 80/443. */
+    runningAs: string | null
+    /** Ports the running master is actually listening on. */
+    listening: number[]
   }> {
     const binary = this.native.which('nginx')
     const harborConfig = this.harborConfigPath()
@@ -339,7 +398,9 @@ export class NginxManager {
         connected: false,
         configPath: null,
         harborConfig,
-        strategy: null
+        strategy: null,
+        runningAs: null,
+        listening: []
       }
     }
     const running = await exec('/usr/bin/pgrep -x nginx')
@@ -351,7 +412,9 @@ export class NginxManager {
       connected: this.isConnected(),
       configPath: this.systemConfigPath(),
       harborConfig,
-      strategy: this.strategy()
+      strategy: this.strategy(),
+      runningAs: await this.masterUser(),
+      listening: await this.listeningPorts()
     }
   }
 
@@ -388,6 +451,23 @@ export class NginxManager {
       await exec(`${binary} -s reload`)
     } catch {
       await this.privileged.run(`${binary} -s reload`)
+    }
+  }
+
+  /** What the running master is bound to, which may differ from the config. */
+  async listeningPorts(): Promise<number[]> {
+    try {
+      const { stdout } = await exec(
+        "/usr/sbin/lsof -nP -iTCP -sTCP:LISTEN -a -c nginx 2>/dev/null | awk '{print $9}'"
+      )
+      const ports = new Set<number>()
+      for (const line of stdout.split('\n')) {
+        const port = Number(line.split(':').pop())
+        if (Number.isFinite(port) && port > 0) ports.add(port)
+      }
+      return [...ports].sort((a, b) => a - b)
+    } catch {
+      return []
     }
   }
 

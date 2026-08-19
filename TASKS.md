@@ -74,7 +74,8 @@ The blocking phase. Each task ends with something observable in a browser.
   path. Surface state on the Settings screen ("front door: connected").
   *Done when:* a hand-written vhost in `sites/` responds over HTTP.
 
-- [ ] **1.2 — Own the PHP-FPM pool.**
+- [x] **1.2 — Own the PHP-FPM pool.** *(done — this was the reason no PHP site
+  had ever worked)*
   `PhpRuntime.fpmSocket()` (`php.ts:35`) *guesses* a path
   (`$PREFIX/var/run/php83-fpm.sock`). Harbor never writes a pool config and
   never starts php-fpm; Homebrew's default pool listens on TCP anyway. Every

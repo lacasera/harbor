@@ -18,7 +18,10 @@ export const paths = {
   nginx: join(HARBOR_HOME, 'nginx'),
   vhosts: join(HARBOR_HOME, 'nginx', 'sites'),
   compose: join(HARBOR_HOME, 'compose'),
-  bin: join(HARBOR_HOME, 'bin')
+  bin: join(HARBOR_HOME, 'bin'),
+  /** Sockets and pid files for processes Harbor runs. */
+  run: join(HARBOR_HOME, 'run'),
+  php: join(HARBOR_HOME, 'php')
 } as const
 
 export function ensureDirs(): void {

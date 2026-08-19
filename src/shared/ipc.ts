@@ -43,6 +43,11 @@ export interface NginxStatus {
   configPath: string | null
   /** Harbor's own include file. */
   harborConfig: string
+  strategy: 'drop-in' | 'config-edit' | null
+  /** The user the master runs as; root is required to bind 80/443. */
+  runningAs: string | null
+  /** Ports the running master is actually bound to. */
+  listening: number[]
 }
 
 /** User-editable app settings, surfaced on the Settings screen. */
@@ -135,6 +140,8 @@ export interface IpcContract {
   /** Add Harbor's include to the system nginx.conf. Prompts for root. */
   'nginx:connect': [[], NginxStatus]
   'nginx:disconnect': [[], NginxStatus]
+  /** Full restart — a reload cannot move a master to different ports. */
+  'nginx:restart': [[], NginxStatus]
 }
 
 export type IpcChannel = keyof IpcContract

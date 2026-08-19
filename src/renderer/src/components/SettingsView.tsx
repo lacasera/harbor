@@ -90,6 +90,15 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
       .finally(() => setBusy(false))
   }
 
+  // "Running" is not the same as "serving": a master started on 8080 keeps
+  // listening there no matter what the config now says.
+  const boundCorrectly = Boolean(
+    status?.nginx.running &&
+      settings &&
+      status.nginx.listening.includes(settings.httpPort) &&
+      status.nginx.listening.includes(settings.httpsPort)
+  )
+
   const patch = async (next: Partial<AppSettings>): Promise<void> => {
     setError(null)
     try {
@@ -292,23 +301,49 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 <div className="hint">Single front door for every .{tld || 'test'} domain</div>
               </div>
               <div className="v">
-                <span className="mono small" style={{ color: 'var(--tx2)' }}>
-                  {status?.nginx.installed
-                    ? status.nginx.running
-                      ? 'installed · running'
-                      : 'installed · stopped'
-                    : 'not installed — brew install nginx'}
+                <span className="hstack" style={{ gap: 6, fontSize: 12, color: 'var(--tx2)' }}>
+                  <span
+                    className={`dot sm ${
+                      status?.nginx.running && boundCorrectly ? 'running' : status?.nginx.running ? 'busy' : 'error'
+                    }`}
+                  />
+                  {!status?.nginx.installed
+                    ? 'not installed — brew install nginx'
+                    : !status.nginx.running
+                      ? 'stopped'
+                      : boundCorrectly
+                        ? `running as ${status.nginx.runningAs} on ${status.nginx.listening.join(', ')}`
+                        : `running as ${status.nginx.runningAs} on ${
+                            status.nginx.listening.join(', ') || 'nothing'
+                          } — needs :${settings?.httpPort}/:${settings?.httpsPort}`}
                 </span>
                 <button
                   type="button"
-                  className="btn xs"
-                  disabled={!status?.nginx.installed}
-                  onClick={() => void invoke('nginx:reload').catch((e: Error) => setError(e.message))}
+                  className={`btn xs ${boundCorrectly ? '' : 'outline-ac'}`}
+                  disabled={busy || !status?.nginx.installed}
+                  onClick={() => {
+                    setBusy(true)
+                    setError(null)
+                    void invoke('nginx:restart')
+                      .then((next) => setStatus((s) => (s ? { ...s, nginx: next } : s)))
+                      .catch((e: Error) => setError(e.message))
+                      .finally(() => setBusy(false))
+                  }}
                 >
-                  Reload config
+                  {busy ? 'Working…' : 'Restart nginx…'}
                 </button>
               </div>
             </div>
+            {status?.nginx.running && !boundCorrectly && (
+              <div className="row">
+                <div className="k" />
+                <div className="v small muted" style={{ textWrap: 'pretty' }}>
+                  A running master keeps the ports it started with, so changing them needs a
+                  restart. Binding {settings && settings.httpsPort < 1024 ? '443' : 'these ports'}{' '}
+                  requires your password.
+                </div>
+              </div>
+            )}
 
             <div className="row">
               <div>

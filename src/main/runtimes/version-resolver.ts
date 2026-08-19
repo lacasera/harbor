@@ -67,14 +67,36 @@ export class VersionResolver {
   }
 }
 
+/**
+ * Resolve a version spec against what is installed.
+ *
+ * Prefix matching alone is wrong for the specs people actually write: a
+ * project requiring `^8.3` is satisfied by an installed 8.4, but a prefix
+ * match reports nothing installed and the site fails to serve. Caret and
+ * `>=` are treated as "this or newer, same major"; a bare version still
+ * prefers an exact or prefix match first.
+ */
 export function matchVersion(spec: string, installed: string[]): string | null {
-  const clean = spec.replace(/^[v^~>=<\s]+/, '').trim()
+  const trimmed = spec.trim()
+  const clean = trimmed.replace(/^[v^~>=<\s]+/, '').trim()
   if (!clean) return null
+
+  // Exact, then prefix (8.3 → 8.3.9), which is what a pinned version means.
   if (installed.includes(clean)) return clean
   const prefixed = installed
     .filter((v) => v === clean || v.startsWith(`${clean}.`))
     .sort(compareSemver)
-  return prefixed[prefixed.length - 1] ?? null
+  if (prefixed.length) return prefixed[prefixed.length - 1] as string
+
+  // Range specs accept anything newer within the same major.
+  const isRange = /^[\^~]|^>=/.test(trimmed)
+  if (!isRange) return null
+
+  const wantedMajor = Number(clean.split('.')[0])
+  const candidates = installed
+    .filter((v) => Number(v.split('.')[0]) === wantedMajor && compareSemver(v, clean) >= 0)
+    .sort(compareSemver)
+  return candidates[candidates.length - 1] ?? null
 }
 
 export function compareSemver(a: string, b: string): number {

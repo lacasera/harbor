@@ -14,10 +14,12 @@ import type { ProcessManager } from '../core/process-manager.js'
 import type { PortAllocator } from '../core/port-allocator.js'
 import type { RuntimeManager } from '../runtimes/index.js'
 import type { PhpRuntime } from '../runtimes/php.js'
+import type { PhpFpmManager } from '../runtimes/php-fpm.js'
 import type { NativeBackend } from '../backends/native-backend.js'
 import type { PrivilegedHelper } from '../core/privileged-helper.js'
 import { paths } from '../core/paths.js'
 import { binDirOf, resolveBinary } from '../core/resolve-binary.js'
+import { matchVersion } from '../runtimes/version-resolver.js'
 import { NginxManager, type VhostContext } from './nginx-manager.js'
 import type { TlsManager } from './tls.js'
 import { PhpFrameworkRegistry, createPhpFrameworkRegistry } from './php-frameworks/index.js'
@@ -31,6 +33,7 @@ export interface ProjectManagerDeps {
   ports: PortAllocator
   runtimes: RuntimeManager
   php: PhpRuntime
+  fpm: PhpFpmManager
   native: NativeBackend
   privileged: PrivilegedHelper
   tls: TlsManager
@@ -176,6 +179,17 @@ export class ProjectManager extends EventEmitter {
       }
     }
 
+    // Every fpm site needs a pool listening before nginx can reach it.
+    for (const version of new Set(
+      await Promise.all(
+        this.list()
+          .filter((p) => p.serveModel === 'fpm')
+          .map((p) => this.resolvePhpVersion(p).catch(() => null))
+      )
+    )) {
+      if (version) await this.deps.fpm.start(version).catch(() => undefined)
+    }
+
     // Harbor owns this directory outright. An orphan left by a forgotten
     // project — or by an older build — is still loaded by nginx, and one
     // malformed file makes `nginx -t` fail for every site at once.
@@ -283,12 +297,7 @@ export class ProjectManager extends EventEmitter {
       ctx.frontController = framework.frontController(project.path)
       ctx.rewrites = framework.rewrites(project.path)
 
-      const pinned =
-        (await framework.isolatedPhpVersion?.(project.path)) ??
-        (await this.deps.php.activeVersion(project.path)) ??
-        (await this.deps.php.installedVersions())[0]
-      if (!pinned) throw new Error('No PHP version installed — install one before serving PHP sites')
-      ctx.fpmSocket = this.deps.php.fpmSocket(pinned)
+      ctx.fpmSocket = this.deps.php.fpmSocket(await this.resolvePhpVersion(project, framework))
     }
 
     if (project.serveModel === 'reverse-proxy') {
@@ -323,10 +332,48 @@ export class ProjectManager extends EventEmitter {
     this.nginx.write(ctx)
   }
 
+  /**
+   * The PHP version this site should be served with, resolved to one that is
+   * actually installed. A pin of `^8.3` against an installed 8.4 must resolve
+   * to 8.4 — pointing the vhost at a pool for a version that isn't there is
+   * how a site 502s with nothing obviously wrong.
+   */
+  async resolvePhpVersion(
+    project: Project,
+    framework?: { isolatedPhpVersion?: (dir: string) => Promise<string | null> }
+  ): Promise<string> {
+    const installed = await this.deps.php.installedVersions()
+    if (!installed.length) {
+      throw new Error(
+        'No PHP is installed. Install one with: brew install php@8.4'
+      )
+    }
+
+    const requested =
+      (await framework?.isolatedPhpVersion?.(project.path)) ??
+      (await this.deps.php.activeVersion(project.path))
+
+    if (!requested) return installed[0] as string
+    return matchVersion(requested, installed) ?? (installed[0] as string)
+  }
+
+  /** Make sure the pool a site's vhost points at is actually listening. */
+  async ensureFpmFor(project: Project): Promise<string | null> {
+    if (project.serveModel !== 'fpm') return null
+    const framework =
+      this.frameworks.get(project.frameworkId ?? '') ?? (await this.frameworks.detect(project.path))
+    const version = await this.resolvePhpVersion(project, framework)
+    await this.deps.fpm.start(version)
+    return version
+  }
+
   /** Start a project's dev server. FPM/static sites have nothing to start. */
   async start(id: string): Promise<ProjectDescriptor> {
     const project = this.find(id)
     if (project.serveModel !== 'reverse-proxy') {
+      // Nothing to spawn for the site itself, but an fpm site is not servable
+      // until its pool is up.
+      await this.ensureFpmFor(project)
       await this.writeVhost(project)
       return this.emitChanged(project)
     }

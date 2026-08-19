@@ -9,6 +9,7 @@ import { ServiceRegistry } from './services/registry.js'
 import { registerServices } from './services/index.js'
 import { RuntimeManager, registerRuntimes } from './runtimes/index.js'
 import { PhpRuntime } from './runtimes/php.js'
+import { PhpFpmManager } from './runtimes/php-fpm.js'
 import { ProjectManager } from './projects/index.js'
 import { DnsmasqManager } from './projects/dnsmasq.js'
 import { TlsManager } from './projects/tls.js'
@@ -31,6 +32,7 @@ export class HarborApp {
   readonly services: ServiceRegistry
   readonly runtimes: RuntimeManager
   readonly projects: ProjectManager
+  readonly fpm: PhpFpmManager
   readonly dns: DnsmasqManager
   readonly tls: TlsManager
   readonly intelligence: CodeIntelligence
@@ -57,6 +59,7 @@ export class HarborApp {
     this.runtimes = new RuntimeManager(this.store)
     registerRuntimes(this.runtimes, { native: this.native })
     const php = this.runtimes.get('php') as PhpRuntime
+    this.fpm = new PhpFpmManager(php, this.processes)
 
     this.tls = new TlsManager(this.native, this.privileged)
 
@@ -66,6 +69,7 @@ export class HarborApp {
       ports: this.ports,
       runtimes: this.runtimes,
       php,
+      fpm: this.fpm,
       native: this.native,
       privileged: this.privileged,
       tls: this.tls
@@ -82,9 +86,16 @@ export class HarborApp {
     this.services.startHealthPolling()
     this.projects.nginx.ensureRootConfig()
 
+    // DNS is unprivileged and useless when not running, so start it rather
+    // than making every user click the same button on every launch.
+    if (this.dns.isInstalled()) {
+      await this.dns.start(this.store.get().settings.tld).catch(() => undefined)
+    }
+
     // Vhosts are otherwise only written on park/update, so a deleted file, a
     // changed TLD or a newly issued certificate would leave nginx serving
-    // stale config until the user touched each project.
+    // stale config until the user touched each project. This also brings up a
+    // PHP-FPM pool for every fpm site.
     await this.projects.rewriteAllVhosts()
 
     if (this.store.get().settings.autoStartServices) {
@@ -96,6 +107,7 @@ export class HarborApp {
     this.processes.stopUsagePolling()
     this.services.stopHealthPolling()
     this.intelligence.stopAll()
+    await this.fpm.stopAll().catch(() => undefined)
     await this.services.stopAll()
     await this.processes.stopAll()
     // Persist synchronously: quitting must not drop the last config change.
