@@ -1,0 +1,202 @@
+# Harbor — implementation tasks
+
+Status as of the design-implementation commit (`27700ca`).
+
+**What exists:** every interface from `CLAUDE.md`, a working `ProcessManager`
+(with persisted port allocation), `ConfigStore`, `LogAggregator`,
+`PrivilegedHelper`, both backends, MinIO + RabbitMQ drivers, four runtime
+drivers with the `VersionResolver`, `ProjectManager` + `NginxManager` + four PHP
+framework drivers, dnsmasq/mkcert modules, two analyzers, and the full UI.
+
+**What that means:** the app builds, boots, and every screen renders — but
+**no `.test` site has ever actually been served**. The vhost renderer is
+verified by unit test; the path from a rendered vhost to a browser response is
+not connected. Phase 1 is that connection. Nothing else matters until it works.
+
+Definition of done for v1 is the vertical slice named in `CLAUDE.md`:
+
+> MinIO (service) + an Express app parked at `api.test` (reverse-proxy project)
+> + Node runtime resolution + both flowing into the unified log viewer.
+
+---
+
+## P0 — defects found by audit
+
+Small, certain bugs. Fix before building on top of them.
+
+- [ ] **P0.1 — Service CPU/RAM never displays.**
+  `ServicesView.tsx:90` and `ServiceDetail.tsx:72` match usage samples with
+  `usage.find(u => u.processId.startsWith(service.id))`, but `processId` is a
+  `randomUUID()` (`process-manager.ts:26`) and never begins with a service id.
+  Both always render `—`.
+  *Fix:* resolve the handle by owner first (as `ProjectDetail` already does):
+  find the process where `owner.kind === 'service' && owner.id === service.id`,
+  then match `usage.processId === handle.id`. Pass `processes` into both views.
+  *Done when:* a running MinIO shows non-zero CPU and memory on its card.
+
+- [ ] **P0.2 — Docker compose fragments are lost on restart.**
+  `DockerBackend.fragments` is an in-memory `Map`. After an app restart,
+  starting one Docker service rewrites `~/.harbor/compose/docker-compose.json`
+  containing only that service — silently dropping every other service's
+  definition from the merged file.
+  *Fix:* persist fragments (ConfigStore or a file next to the compose output)
+  and reload them in the constructor; merge from the persisted set.
+  *Done when:* start RabbitMQ, restart Harbor, start a second Docker service —
+  both remain in the compose file and both stay up.
+
+- [ ] **P0.3 — MinIO downloads an arm64 binary on Intel Macs.**
+  `minio.ts:13` hardcodes `darwin-arm64`.
+  *Fix:* select from `process.arch`, matching the pattern already used in
+  `NodeRuntime`/`DenoRuntime`/`BunRuntime`.
+  *Done when:* the URL is arch-derived; verify the x64 URL resolves (HEAD 200).
+
+---
+
+## Phase 1 — make the front door real
+
+The blocking phase. Each task ends with something observable in a browser.
+
+- [ ] **1.1 — Wire Harbor's vhosts into the system nginx.**
+  `NginxManager.ensureRootConfig()` writes `~/.harbor/nginx/harbor.conf`
+  containing `include ~/.harbor/nginx/sites/*.conf;`, but **nothing ever adds
+  that file to the system `nginx.conf`**, so no vhost is ever served.
+  *Build:* detect the brew nginx config path (`$PREFIX/etc/nginx/nginx.conf`),
+  and idempotently insert `include <harbor.conf>;` inside its `http {}` block
+  via `PrivilegedHelper`. Back up the original once. Add a matching removal
+  path. Surface state on the Settings screen ("front door: connected").
+  *Done when:* a hand-written vhost in `sites/` responds over HTTP.
+
+- [ ] **1.2 — Own the PHP-FPM pool.**
+  `PhpRuntime.fpmSocket()` (`php.ts:35`) *guesses* a path
+  (`$PREFIX/var/run/php83-fpm.sock`). Harbor never writes a pool config and
+  never starts php-fpm; Homebrew's default pool listens on TCP anyway. Every
+  `fpm` vhost currently points at a socket that does not exist.
+  *Build:* generate a Harbor-owned pool per installed PHP version writing to a
+  socket under `~/.harbor/run/`, start `php-fpm` for that pool through
+  `ProcessManager` (so its logs aggregate for free), and have `fpmSocket()`
+  return the path Harbor actually created. Add health detection.
+  *Done when:* a Laravel app parks and serves at `<name>.test`.
+
+- [ ] **1.3 — Run the dnsmasq + resolver setup for real.**
+  `DnsmasqManager` is written but has never been executed. Verify the brew
+  path, the fragment location, `/etc/resolver/<tld>`, and the restart command
+  on a real machine; fix what the first run reveals.
+  *Done when:* `dig foo.test @127.0.0.1` returns `127.0.0.1` and a browser
+  resolves an arbitrary `*.test` name without an `/etc/hosts` entry.
+
+- [ ] **1.4 — Run the mkcert flow for real.**
+  Same: `TlsManager` is unexercised. Confirm CA install, per-site cert issue,
+  and that a `secure: true` vhost serves HTTPS without a browser warning.
+  Wire "Secure (TLS)" on the project Overview to issue the cert before
+  re-rendering the vhost — today the toggle sets the flag and the vhost falls
+  back to HTTP because no cert file exists (`projects/index.ts:236`).
+  *Done when:* toggling TLS on a parked site yields a trusted `https://` load.
+
+- [ ] **1.5 — Re-render vhosts on boot.**
+  Vhosts are written on park/update only. If the TLD changes, a cert is added,
+  or the file is deleted, state drifts.
+  *Build:* re-render every project's vhost during `HarborApp.start()`, then run
+  one `nginx -t` and reload if it passes.
+  *Done when:* deleting `sites/*.conf` and restarting restores every site.
+
+---
+
+## Phase 2 — the vertical slice
+
+- [ ] **2.1 — Express app at `api.test`, end to end.**
+  Park a real Express project, confirm detection → `node-server` →
+  reverse-proxy, port allocated and persisted, `npm run dev` spawned with
+  `PORT` injected, nginx proxying, and the port stable across an app restart.
+  *Done when:* `curl http://api.test` returns the app, twice, across a restart.
+
+- [ ] **2.2 — MinIO end to end.**
+  Install through the UI, start, health goes green, real ports bound, Copy
+  `.env` produces values matching the running instance (not schema defaults).
+  *Done when:* the copied block works verbatim in a Laravel `.env`.
+
+- [ ] **2.3 — Both in the unified log viewer.**
+  MinIO stdout and the Express dev server both appear, tagged, filterable,
+  following.
+  *Done when:* source chips list both and filtering isolates each.
+
+- [ ] **2.4 — Write the slice up as a smoke script.**
+  Extend `scripts/smoke.ts` (or add an integration script) so the slice is
+  re-checkable rather than a one-off manual pass.
+
+---
+
+## Phase 3 — correctness and robustness
+
+- [ ] **3.1 — Service lifecycle on quit/crash.** Verify children die with the
+  app (`before-quit` → `shutdown`), and that a crashed service reports
+  `crashed` rather than silently showing stopped.
+- [ ] **3.2 — Port conflicts.** Allocator skips a port held by a foreign
+  process, and surfaces a clear error when the range is exhausted.
+- [ ] **3.3 — Health-check cost.** `ServiceRegistry.describe()` health-checks on
+  every call; `services:list` runs on every UI mount. Cache briefly or make the
+  UI subscribe rather than re-list.
+- [ ] **3.4 — Config validation.** `ajv` is a dependency but unused. Validate
+  `values` against `configSchema` in `updateConfig` and return field errors the
+  form can display.
+- [ ] **3.5 — Error surfacing.** Driver failures (install, start) currently
+  reach the UI as raw `Error.message`. Decide on a consistent shape.
+
+---
+
+## Phase 4 — remaining services
+
+Each is one driver file plus one line in `services/index.ts` — no UI work. Order
+by usefulness:
+
+- [ ] **4.1** Meilisearch (native)
+- [ ] **4.2** Elasticsearch (docker)
+- [ ] **4.3** LocalStack (docker)
+- [ ] **4.4** OpenSearch (docker)
+- [ ] **4.5** Kafka (docker)
+
+Each done when: installs, starts, health-checks, logs aggregate, and its
+`envHints` produce a correct block against the running instance.
+
+---
+
+## Phase 5 — code intelligence
+
+- [ ] **5.1 — Validate the Eloquent analyzer against real apps.** It is
+  regex-based by design; run it over two or three real Laravel codebases and
+  fix what it misses. Warnings must name what it could not parse.
+- [ ] **5.2 — Symfony/Doctrine analyzer** (entity attributes → same graph).
+- [ ] **5.3 — File-watch invalidation.** The cache invalidates on mtime at read
+  time; add a watcher so an open Insights tab refreshes.
+- [ ] **5.4 — Project ↔ service association.** The Env tab currently aggregates
+  *every running service* because no association exists (stated in the UI).
+  Add per-project service selection, persist it, and scope the block.
+
+---
+
+## Phase 6 — packaging
+
+- [ ] **6.1** Icon and `build/` assets.
+- [ ] **6.2** Signing + notarization.
+- [ ] **6.3** `SMJobBless` helper to replace `sudo-prompt` — all privileged
+  calls already funnel through `PrivilegedHelper`, so this is one file.
+- [ ] **6.4** Auto-update (`electron-updater` is already a dependency).
+
+---
+
+## Testing
+
+Today: `npm run smoke` (9 pure-logic checks) and `npm run typecheck`. There is
+no test runner.
+
+- [ ] **T.1** Add a real runner (`vitest`) and port `scripts/smoke.ts` to it.
+- [ ] **T.2** Unit-test `PortAllocator` persistence, `VersionResolver` priority
+  order, and `ServiceRegistry.envBlock` live-value resolution.
+- [ ] **T.3** Integration test for the Phase 2 slice, gated behind an env flag
+  so it only runs where nginx/dnsmasq are installed.
+
+---
+
+## Out of scope for v1
+
+Request inspector (premium, built last), Go project type, global shell exposure
+of runtimes, Windows/Linux support.
