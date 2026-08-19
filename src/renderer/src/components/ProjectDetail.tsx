@@ -175,7 +175,7 @@ export function ProjectDetail({
         />
       </div>
 
-      <div className="page-body" style={{ paddingTop: 20 }}>
+      <div className={`page-body ${tab === 'logs' ? 'fill' : ''}`} style={{ paddingTop: 20 }}>
         {error && <p className="error-text">{error}</p>}
 
         {tab === 'overview' && (
@@ -204,7 +204,7 @@ export function ProjectDetail({
         {tab === 'insights' && <InsightsTab project={project} />}
 
         {tab === 'logs' && (
-          <div className="card" style={{ maxWidth: 1180 }}>
+          <div className="card">
             <div className="card-head tinted">
               <span>{project.name}</span>
               <span className="mono small muted">
@@ -222,7 +222,7 @@ export function ProjectDetail({
             <div className="log-pane">
               {/* Not compact: these come from several files, so the stream
                   each line came from is the useful column. */}
-              <LogRows lines={logs.filter((l) => l.source === project.id).slice(-120)} />
+              <LogRows lines={logs.filter((l) => l.source === project.id).slice(-500)} />
             </div>
           </div>
         )}
@@ -524,8 +524,8 @@ function EnvTab({
   const conflicts = rows.filter((r) => r.eq && existing.has(r.key) && existing.get(r.key) !== r.value)
 
   return (
-    <div style={{ maxWidth: 860 }}>
-      <div className="card" style={{ marginBottom: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="card">
         <div className="card-head tinted" style={{ padding: '9px 14px' }}>
           <span className="mono small" style={{ color: 'var(--tx2)' }}>
             {envFile?.path.split('/').pop() ?? '.env'}
@@ -580,7 +580,7 @@ function EnvTab({
           alignItems: 'flex-end',
           justifyContent: 'space-between',
           gap: 16,
-          marginBottom: 12
+          marginBottom: -8
         }}
       >
         <div>

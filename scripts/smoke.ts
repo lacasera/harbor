@@ -24,6 +24,7 @@ import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
 import { readProjectEnv } from '../src/main/projects/env-file.js'
+import { streamLabel } from '../src/main/core/log-aggregator.js'
 import { quoteForAppleScript } from '../src/main/core/privileged-helper.js'
 import { adviseTld } from '../src/shared/tld.js'
 import { MinioDriver } from '../src/main/services/minio.js'
@@ -450,6 +451,15 @@ check('real public TLDs are flagged before they are adopted', () => {
   assert.equal(adviseTld('harbor').level, 'warn')
   assert.equal(adviseTld('').level, 'danger')
   assert.equal(adviseTld('not valid!').level, 'danger')
+})
+
+check('log stream labels keep the part that differs', () => {
+  // These two must not collapse to the same truncated column.
+  assert.equal(streamLabel('nginx', 'acme-commerce.test.access.log'), 'nginx/access')
+  assert.equal(streamLabel('nginx', 'acme-commerce.test.error.log'), 'nginx/error')
+  assert.equal(streamLabel('laravel', 'laravel.log'), 'laravel/laravel')
+  assert.equal(streamLabel('laravel', 'laravel-2026-08-19.log'), 'laravel/laravel-2026-08-19')
+  assert.equal(streamLabel(undefined, 'debug.log'), 'debug')
 })
 
 check('a project .env is read as written, not interpreted', async () => {

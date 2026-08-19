@@ -76,7 +76,7 @@ export class LogAggregator extends EventEmitter {
       }
       for (const entry of entries) {
         if (!pattern.test(entry)) continue
-        this.tailFile(sourceId, src.label ? `${src.label}/${entry}` : entry, join(dir, entry))
+        this.tailFile(sourceId, streamLabel(src.label, entry), join(dir, entry))
       }
     }
 
@@ -191,6 +191,20 @@ export class LogAggregator extends EventEmitter {
   clear(): void {
     this.ring.length = 0
   }
+}
+
+/**
+ * A readable column label for one file in a watched directory.
+ *
+ * The filename alone is too long to show — `acme.test.access.log` truncates to
+ * nothing useful next to `acme.test.error.log`, which is exactly the
+ * distinction the column exists to make. The last dot-segment before the
+ * extension is the part that differs: access, error, laravel, browser.
+ */
+export function streamLabel(prefix: string | undefined, filename: string): string {
+  const base = filename.replace(/\.log$/, '')
+  const short = base.split('.').pop() || base
+  return prefix ? `${prefix}/${short}` : short
 }
 
 export function detectLevel(message: string): LogLevel {

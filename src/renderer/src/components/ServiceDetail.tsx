@@ -189,7 +189,7 @@ export function ServiceDetail({
         />
       </div>
 
-      <div className="page-body" style={{ paddingTop: 20 }}>
+      <div className={`page-body ${tab === 'logs' ? 'fill' : ''}`} style={{ paddingTop: 20 }}>
         {error && <p className="error-text">{error}</p>}
 
         {tab === 'config' && (
@@ -240,7 +240,7 @@ export function ServiceDetail({
         )}
 
         {tab === 'env' && (
-          <div style={{ maxWidth: 760 }}>
+          <div>
             <div
               style={{
                 display: 'flex',
@@ -293,7 +293,7 @@ export function ServiceDetail({
         )}
 
         {tab === 'logs' && (
-          <div className="card" style={{ maxWidth: 1180 }}>
+          <div className="card">
             <div className="card-head tinted">
               <span>{service.displayName}</span>
               <span className="mono small muted">stdout + stderr</span>
@@ -308,7 +308,7 @@ export function ServiceDetail({
               </button>
             </div>
             <div className="log-pane">
-              <LogRows lines={logs.filter((l) => l.source === service.id).slice(-60)} compact />
+              <LogRows lines={logs.filter((l) => l.source === service.id).slice(-500)} compact />
             </div>
           </div>
         )}

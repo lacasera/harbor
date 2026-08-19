@@ -231,6 +231,31 @@
   overflow: auto;
   padding: 18px 24px 40px;
 }
+
+/*
+ * For panes that should own the viewport rather than sit in a scrolling page:
+ * the body stops scrolling, the card fills what's left, and the content inside
+ * it scrolls. Without min-height:0 a flex child refuses to shrink below its
+ * content and the inner scroll never engages.
+ */
+.page-body.fill {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+.page-body.fill > .card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-body.fill > .card > .log-pane,
+.page-body.fill > .card > .env-block {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
 .detail-head {
   flex: none;
   padding: 14px 24px 0;
@@ -989,7 +1014,7 @@
 }
 .log-row .src {
   flex: none;
-  width: 116px;
+  width: 140px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1027,6 +1052,10 @@
   padding: 10px 0;
   max-height: 520px;
   overflow: auto;
+}
+/* Wrapping long nginx lines beats a horizontal scrollbar on every row. */
+.log-pane .log-row .msg {
+  overflow-wrap: anywhere;
 }
 .log-pane .log-row {
   padding: 1px 14px;
