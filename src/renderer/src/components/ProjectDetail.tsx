@@ -14,9 +14,11 @@ import {
   Toggle,
   formatBytes,
   formatUptime,
+  processForOwner,
   statusOf,
   tintFor,
-  useCopy
+  useCopy,
+  usageForOwner
 } from './primitives.js'
 import { EnvLines, toRows, toText } from './EnvBlock.js'
 import { Insights } from './Insights.js'
@@ -62,8 +64,8 @@ export function ProjectDetail({
     }
   }
 
-  const proc = processes.find((p) => p.owner.kind === 'project' && p.owner.id === project.id)
-  const sample = usage.find((u) => u.processId === proc?.id)
+  const proc = processForOwner(processes, 'project', project.id)
+  const sample = usageForOwner(processes, usage, 'project', project.id)
 
   return (
     <>

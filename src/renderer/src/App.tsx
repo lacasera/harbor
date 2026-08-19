@@ -186,6 +186,7 @@ export function App(): React.JSX.Element {
           {route.name === 'services' && (
             <ServicesView
               services={services}
+              processes={processes}
               usage={usage}
               onOpen={(id) => setRoute({ name: 'service', id })}
               onChanged={(next) =>
@@ -199,6 +200,7 @@ export function App(): React.JSX.Element {
               <ServiceDetail
                 service={service}
                 catalogue={services}
+                processes={processes}
                 usage={usage}
                 logs={logs}
                 onBack={() => setRoute({ name: 'services' })}

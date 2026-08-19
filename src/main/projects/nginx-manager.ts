@@ -163,13 +163,101 @@ export class NginxManager {
     ])
   }
 
-  async status(): Promise<{ installed: boolean; running: boolean; configPath: string | null }> {
+  // ── front door connection ───────────────────────────────────────────────
+  //
+  // Rendering a vhost into ~/.harbor is not enough: the system nginx has to be
+  // told to read it. Without the include below, every vhost Harbor generates
+  // is inert. This is the one edit Harbor makes to a file it does not own, so
+  // it is idempotent, backed up once, and reversible.
+
+  harborConfigPath(): string {
+    return join(paths.nginx, 'harbor.conf')
+  }
+
+  private includeLine(): string {
+    return `include ${this.harborConfigPath()};`
+  }
+
+  /** Where the system nginx reads its config from. */
+  systemConfigPath(): string | null {
+    const prefix = this.native.brewPrefix()
+    if (!prefix) return null
+    const candidate = join(prefix, 'etc', 'nginx', 'nginx.conf')
+    return existsSync(candidate) ? candidate : null
+  }
+
+  private backupPath(): string {
+    return join(paths.nginx, 'nginx.conf.pre-harbor')
+  }
+
+  isConnected(): boolean {
+    const config = this.systemConfigPath()
+    if (!config) return false
+    try {
+      return readFileSync(config, 'utf8').includes(this.includeLine())
+    } catch {
+      return false
+    }
+  }
+
+  /** Add the include and reload. Prompts for root once. */
+  async connect(): Promise<void> {
+    const config = this.systemConfigPath()
+    if (!config) throw new Error('nginx is not installed — install it with: brew install nginx')
+
+    this.ensureRootConfig()
+    const next = insertHarborInclude(readFileSync(config, 'utf8'), this.includeLine())
+    if (next === null) return // already connected
+
+    const staged = join(paths.nginx, 'nginx.conf.staged')
+    writeFileSync(staged, next, 'utf8')
+    await this.privileged.installFile(staged, config, this.backupPath())
+    rmSync(staged, { force: true })
+
+    const check = await this.test()
+    if (!check.ok) {
+      // Put the original back rather than leaving nginx unable to start.
+      await this.privileged.installFile(this.backupPath(), config)
+      throw new Error(`nginx rejected the config, reverted: ${check.output}`)
+    }
+    await this.reload()
+  }
+
+  async disconnect(): Promise<void> {
+    const config = this.systemConfigPath()
+    if (!config) return
+    const next = removeHarborInclude(readFileSync(config, 'utf8'), this.includeLine())
+    if (next === null) return
+
+    const staged = join(paths.nginx, 'nginx.conf.staged')
+    writeFileSync(staged, next, 'utf8')
+    await this.privileged.installFile(staged, config)
+    rmSync(staged, { force: true })
+    await this.reload()
+  }
+
+  async status(): Promise<{
+    installed: boolean
+    running: boolean
+    connected: boolean
+    configPath: string | null
+    harborConfig: string
+  }> {
     const binary = this.native.which('nginx')
-    if (!binary) return { installed: false, running: false, configPath: null }
+    const harborConfig = this.harborConfigPath()
+    if (!binary) {
+      return { installed: false, running: false, connected: false, configPath: null, harborConfig }
+    }
     const running = await exec('/usr/bin/pgrep -x nginx')
       .then(() => true)
       .catch(() => false)
-    return { installed: true, running, configPath: join(paths.nginx, 'harbor.conf') }
+    return {
+      installed: true,
+      running,
+      connected: this.isConnected(),
+      configPath: this.systemConfigPath(),
+      harborConfig
+    }
   }
 
   /** Validate before reloading — a bad vhost must not take every site down. */
@@ -197,6 +285,53 @@ export class NginxManager {
     const path = this.vhostPath(project)
     return existsSync(path) ? readFileSync(path, 'utf8') : null
   }
+}
+
+export const HARBOR_MARKER = '# Added by Harbor'
+
+/**
+ * Insert Harbor's include as the first directive inside the top-level `http {}`
+ * block. Returns null when it is already present, so callers can treat a
+ * repeat connect as a no-op rather than duplicating the line.
+ */
+export function insertHarborInclude(source: string, includeLine: string): string | null {
+  if (source.includes(includeLine)) return null
+
+  const lines = source.split('\n')
+  // Match only a top-level `http {`, not a `server {` nested inside one.
+  const httpIndex = lines.findIndex((line) => /^\s*http\s*\{/.test(line))
+  if (httpIndex === -1) throw new Error('No top-level http { } block found in nginx.conf')
+
+  lines.splice(
+    httpIndex + 1,
+    0,
+    '',
+    `    ${HARBOR_MARKER} — serves every .test vhost. Safe to remove.`,
+    `    ${includeLine}`
+  )
+  return lines.join('\n')
+}
+
+/**
+ * Reverse of insertHarborInclude, exactly: the blank spacer we inserted goes
+ * too. A filter that only dropped the marker and include would leave one blank
+ * line behind per cycle, slowly accreting in a file Harbor does not own.
+ * Returns null when there is nothing to remove.
+ */
+export function removeHarborInclude(source: string, includeLine: string): string | null {
+  if (!source.includes(includeLine)) return null
+
+  const out: string[] = []
+  for (const line of source.split('\n')) {
+    if (line.includes(HARBOR_MARKER)) {
+      // Drop our spacer, but never a blank the user's own config had there.
+      if (out[out.length - 1]?.trim() === '') out.pop()
+      continue
+    }
+    if (line.includes(includeLine)) continue
+    out.push(line)
+  }
+  return out.join('\n')
 }
 
 function indent(lines: string[], depth = 1): string[] {

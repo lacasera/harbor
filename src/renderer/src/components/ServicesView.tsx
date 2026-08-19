@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ServiceDescriptor } from '../../../shared/service.js'
-import type { ResourceUsage } from '../../../shared/process.js'
+import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import { invoke } from '../ipc/client.js'
 import {
   StatusDot,
@@ -8,16 +8,19 @@ import {
   formatBytes,
   monogramsFor,
   statusOf,
-  tintFor
+  tintFor,
+  usageForOwner
 } from './primitives.js'
 
 export function ServicesView({
   services,
+  processes,
   usage,
   onOpen,
   onChanged
 }: {
   services: ServiceDescriptor[]
+  processes: ProcessHandle[]
   usage: ResourceUsage[]
   onOpen: (id: string) => void
   onChanged: (next: ServiceDescriptor) => void
@@ -87,7 +90,7 @@ export function ServicesView({
           <div className="service-grid">
             {services.map((service) => {
               const status = statusOf(service.status.health)
-              const sample = usage.find((u) => u.processId.startsWith(service.id))
+              const sample = usageForOwner(processes, usage, 'service', service.id)
               const ports = service.status.ports.length
                 ? service.status.ports
                 : service.defaultPorts

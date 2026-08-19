@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ServiceHealth } from '../../../shared/service.js'
+import type { ProcessHandle, ProcessOwnerKind, ResourceUsage } from '../../../shared/process.js'
 
 /**
  * The recurring pieces the design's component library calls out: one status
@@ -190,6 +191,31 @@ export function monogramsFor(names: string[]): Map<string, string> {
     out.set(name, collides ? first + (name[1] ?? '').toLowerCase() : first)
   }
   return out
+}
+
+/**
+ * Resource samples are keyed by ProcessManager id, not by owner, so a view has
+ * to resolve the owner's live handle first. Doing that in one place stops each
+ * screen from inventing its own (wrong) match.
+ */
+export function processForOwner(
+  processes: ProcessHandle[],
+  kind: ProcessOwnerKind,
+  id: string
+): ProcessHandle | undefined {
+  return processes.find(
+    (p) => p.owner.kind === kind && p.owner.id === id && p.state !== 'stopped'
+  )
+}
+
+export function usageForOwner(
+  processes: ProcessHandle[],
+  usage: ResourceUsage[],
+  kind: ProcessOwnerKind,
+  id: string
+): ResourceUsage | undefined {
+  const handle = processForOwner(processes, kind, id)
+  return handle ? usage.find((u) => u.processId === handle.id) : undefined
 }
 
 export function formatBytes(bytes: number): string {

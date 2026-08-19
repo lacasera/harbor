@@ -5,6 +5,20 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 
+/**
+ * Whether the system nginx is actually reading Harbor's vhosts. `connected`
+ * false means every generated vhost is inert.
+ */
+export interface NginxStatus {
+  installed: boolean
+  running: boolean
+  connected: boolean
+  /** The system nginx.conf Harbor edits, when it can be found. */
+  configPath: string | null
+  /** Harbor's own include file. */
+  harborConfig: string
+}
+
 /** User-editable app settings, surfaced on the Settings screen. */
 export interface AppSettings {
   tld: string
@@ -72,8 +86,11 @@ export interface IpcContract {
   'tls:status': [[], { installed: boolean; caInstalled: boolean }]
   'dns:status': [[], { installed: boolean; configured: boolean }]
 
-  'nginx:status': [[], { installed: boolean; running: boolean; configPath: string | null }]
+  'nginx:status': [[], NginxStatus]
   'nginx:reload': [[], void]
+  /** Add Harbor's include to the system nginx.conf. Prompts for root. */
+  'nginx:connect': [[], NginxStatus]
+  'nginx:disconnect': [[], NginxStatus]
 }
 
 export type IpcChannel = keyof IpcContract

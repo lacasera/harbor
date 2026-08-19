@@ -42,6 +42,22 @@ export class PrivilegedHelper {
     await this.run(`rm -f '${path}'`)
   }
 
+  /**
+   * Copy a file we prepared unprivileged into a root-owned location, keeping a
+   * one-time backup of whatever was there. Preferred over writeFile for
+   * anything large or syntactically fussy: shell-escaping a whole config file
+   * into a printf is a good way to corrupt it.
+   */
+  async installFile(localPath: string, destPath: string, backupPath?: string): Promise<void> {
+    const commands: string[] = []
+    if (backupPath) {
+      // `-n` so the pristine original is never overwritten by a later run.
+      commands.push(`cp -n '${destPath}' '${backupPath}' 2>/dev/null || true`)
+    }
+    commands.push(`cp '${localPath}' '${destPath}'`)
+    await this.runAll(commands)
+  }
+
   /** Unprivileged escape hatch for probing before we decide to escalate. */
   async probe(command: string): Promise<{ ok: boolean; stdout: string }> {
     try {

@@ -110,6 +110,14 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   // ── nginx ───────────────────────────────────────────────────────────────
   handle('nginx:status', () => harbor.projects.nginx.status())
   handle('nginx:reload', () => harbor.projects.nginx.reload())
+  handle('nginx:connect', async () => {
+    await harbor.projects.nginx.connect()
+    return harbor.projects.nginx.status()
+  })
+  handle('nginx:disconnect', async () => {
+    await harbor.projects.nginx.disconnect()
+    return harbor.projects.nginx.status()
+  })
 }
 
 /** Compile-time guard: every channel in the contract must be handled above. */

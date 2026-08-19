@@ -1,6 +1,6 @@
 import { exec as execCb } from 'node:child_process'
 import { promisify } from 'node:util'
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProcessHandle } from '../../shared/process.js'
 import type { ProcessManager } from '../core/process-manager.js'
@@ -27,7 +27,39 @@ export class DockerBackend implements Backend<DockerStartOptions> {
   readonly id = 'docker' as const
   private readonly fragments = new Map<string, ComposeFragment>()
 
-  constructor(private readonly processes: ProcessManager) {}
+  constructor(private readonly processes: ProcessManager) {
+    this.loadFragments()
+  }
+
+  private fragmentsFile(): string {
+    return join(paths.compose, 'fragments.json')
+  }
+
+  /**
+   * Fragments must outlive the process. They are only supplied when a service
+   * starts, so without this a restart would rewrite the merged compose file
+   * with just the one service being started — silently dropping every other
+   * service's definition from it.
+   */
+  private loadFragments(): void {
+    const file = this.fragmentsFile()
+    if (!existsSync(file)) return
+    try {
+      const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, ComposeFragment>
+      for (const [id, fragment] of Object.entries(stored)) this.fragments.set(id, fragment)
+    } catch {
+      // A corrupt cache costs us one re-register per service, not correctness.
+    }
+  }
+
+  private saveFragments(): void {
+    if (!existsSync(paths.compose)) mkdirSync(paths.compose, { recursive: true })
+    writeFileSync(
+      this.fragmentsFile(),
+      JSON.stringify(Object.fromEntries(this.fragments), null, 2),
+      'utf8'
+    )
+  }
 
   async available(): Promise<{ ok: boolean; reason?: string }> {
     const docker = await this.probe('docker version --format "{{.Server.Version}}"')
@@ -43,6 +75,7 @@ export class DockerBackend implements Backend<DockerStartOptions> {
 
   register(serviceId: string, fragment: ComposeFragment): void {
     this.fragments.set(serviceId, fragment)
+    this.saveFragments()
   }
 
   /** Merge every registered fragment into one compose file on disk. */

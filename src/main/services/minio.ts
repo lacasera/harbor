@@ -10,7 +10,10 @@ import type { NativeBackend } from '../backends/native-backend.js'
 import type { ProcessManager } from '../core/process-manager.js'
 import { serviceDataDir, serviceDir, serviceLogFile } from '../core/paths.js'
 
-const DOWNLOAD_URL = 'https://dl.min.io/server/minio/release/darwin-arm64/minio'
+/** MinIO publishes per-arch binaries; picking the wrong one fails at exec time. */
+const DOWNLOAD_URL = `https://dl.min.io/server/minio/release/darwin-${
+  process.arch === 'arm64' ? 'arm64' : 'amd64'
+}/minio`
 
 /**
  * First ServiceDriver, and the one the abstraction was designed against: native

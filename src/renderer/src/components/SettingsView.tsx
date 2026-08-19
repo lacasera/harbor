@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { AppSettings } from '../../../shared/ipc.js'
+import type { AppSettings, NginxStatus } from '../../../shared/ipc.js'
 import { invoke } from '../ipc/client.js'
 import { Toggle } from './primitives.js'
 
 interface SystemStatus {
-  nginx: { installed: boolean; running: boolean; configPath: string | null }
+  nginx: NginxStatus
   tls: { installed: boolean; caInstalled: boolean }
   dns: { installed: boolean; configured: boolean }
 }
@@ -14,6 +14,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const [status, setStatus] = useState<SystemStatus | null>(null)
   const [tld, setTld] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     void invoke('settings:get').then((s) => {
@@ -146,6 +147,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
 
           <div className="card">
             <div className="section-label">Front door</div>
+
             <div className="row">
               <div>
                 <div className="k">nginx</div>
@@ -157,7 +159,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                     ? status.nginx.running
                       ? 'installed · running'
                       : 'installed · stopped'
-                    : 'not installed'}
+                    : 'not installed — brew install nginx'}
                 </span>
                 <button
                   type="button"
@@ -169,6 +171,51 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 </button>
               </div>
             </div>
+
+            <div className="row">
+              <div>
+                <div className="k">Harbor vhosts</div>
+                <div className="hint">
+                  Until nginx includes them, generated vhosts are never served
+                </div>
+              </div>
+              <div className="v">
+                <span className="hstack" style={{ gap: 6, fontSize: 12, color: 'var(--tx2)' }}>
+                  <span className={`dot sm ${status?.nginx.connected ? 'running' : 'error'}`} />
+                  {status?.nginx.connected ? 'connected' : 'not connected'}
+                </span>
+                <button
+                  type="button"
+                  className={`btn xs ${status?.nginx.connected ? '' : 'outline-ac'}`}
+                  disabled={busy || !status?.nginx.installed}
+                  onClick={() => {
+                    setBusy(true)
+                    setError(null)
+                    void invoke(status?.nginx.connected ? 'nginx:disconnect' : 'nginx:connect')
+                      .then((next) => setStatus((s) => (s ? { ...s, nginx: next } : s)))
+                      .catch((e: Error) => setError(e.message))
+                      .finally(() => setBusy(false))
+                  }}
+                >
+                  {busy
+                    ? 'Working…'
+                    : status?.nginx.connected
+                      ? 'Disconnect'
+                      : 'Connect nginx…'}
+                </button>
+              </div>
+            </div>
+
+            {status?.nginx.configPath && (
+              <div className="row">
+                <div className="k">Config file</div>
+                <div className="v">
+                  <span className="mono small" style={{ color: 'var(--tx2)' }}>
+                    {status.nginx.configPath}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

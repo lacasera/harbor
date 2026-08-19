@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { EnvBlock as EnvBlockData, ServiceDescriptor } from '../../../shared/service.js'
 import type { LogLine } from '../../../shared/logs.js'
-import type { ResourceUsage } from '../../../shared/process.js'
+import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import type { ServiceTab } from '../routes.js'
 import { invoke } from '../ipc/client.js'
 import {
@@ -11,7 +11,8 @@ import {
   monogramsFor,
   statusOf,
   tintFor,
-  useCopy
+  useCopy,
+  usageForOwner
 } from './primitives.js'
 import { EnvLines, toRows, toText } from './EnvBlock.js'
 import { SchemaForm } from './SchemaForm.js'
@@ -20,6 +21,7 @@ import { LogRows } from './LogsView.js'
 export function ServiceDetail({
   service,
   catalogue,
+  processes,
   usage,
   logs,
   onBack,
@@ -29,6 +31,7 @@ export function ServiceDetail({
   service: ServiceDescriptor
   /** The whole catalogue, so this tile's monogram matches the grid's. */
   catalogue: ServiceDescriptor[]
+  processes: ProcessHandle[]
   usage: ResourceUsage[]
   logs: LogLine[]
   onBack: () => void
@@ -69,7 +72,7 @@ export function ServiceDetail({
 
   const status = statusOf(service.status.health)
   const running = status === 'running'
-  const sample = usage.find((u) => u.processId.startsWith(service.id))
+  const sample = usageForOwner(processes, usage, 'service', service.id)
   const ports = service.status.ports.length ? service.status.ports : service.defaultPorts
   const blocks = block ? [block] : []
 

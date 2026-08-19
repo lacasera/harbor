@@ -148,6 +148,31 @@ export class ProjectManager extends EventEmitter {
     return this.emitChanged(project)
   }
 
+  /**
+   * Re-render every project's vhost, then reload nginx once if the result is
+   * valid. Failures are collected rather than thrown: one broken project must
+   * not stop the other sites from being served.
+   */
+  async rewriteAllVhosts(): Promise<{ written: number; failed: Array<[string, string]> }> {
+    const failed: Array<[string, string]> = []
+    let written = 0
+
+    for (const project of this.list()) {
+      try {
+        await this.writeVhost(project)
+        written++
+      } catch (err) {
+        failed.push([project.name, (err as Error).message])
+      }
+    }
+
+    if (written && this.nginx.isConnected()) {
+      const check = await this.nginx.test()
+      if (check.ok) await this.nginx.reload().catch(() => undefined)
+    }
+    return { written, failed }
+  }
+
   async forget(id: string): Promise<void> {
     const project = this.find(id)
     const handle = this.deps.processes.findByOwner('project', id)

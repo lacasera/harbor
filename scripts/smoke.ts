@@ -9,7 +9,11 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { NginxManager } from '../src/main/projects/nginx-manager.js'
+import {
+  NginxManager,
+  insertHarborInclude,
+  removeHarborInclude
+} from '../src/main/projects/nginx-manager.js'
 import { createPhpFrameworkRegistry } from '../src/main/projects/php-frameworks/index.js'
 import { interpolate, defaultsFor } from '../src/main/services/registry.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
@@ -153,6 +157,62 @@ check('mermaid ERD drops relations to unparsed models', () => {
   ])
   assert.match(diagram, /User \|\|--o\{ Post/)
   assert.doesNotMatch(diagram, /Ghost/)
+})
+
+// ── front door: the one file Harbor edits that it does not own ────────────
+
+const INCLUDE = 'include /Users/x/.harbor/nginx/harbor.conf;'
+const NGINX_CONF = `worker_processes 1;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+
+    server {
+        listen 8080;
+        server_name localhost;
+    }
+}
+`
+
+check('include lands inside the top-level http block', () => {
+  const out = insertHarborInclude(NGINX_CONF, INCLUDE)
+  assert.ok(out, 'expected a modified config')
+  const lines = (out as string).split('\n')
+  const httpAt = lines.findIndex((l) => /^\s*http\s*\{/.test(l))
+  const includeAt = lines.findIndex((l) => l.includes(INCLUDE))
+  assert.ok(includeAt > httpAt, 'include must come after http {')
+
+  // It must land in the http block, not inside the nested server block.
+  const serverAt = lines.findIndex((l) => /^\s*server\s*\{/.test(l))
+  assert.ok(includeAt < serverAt, 'include must precede the nested server block')
+})
+
+check('connecting twice is a no-op', () => {
+  const once = insertHarborInclude(NGINX_CONF, INCLUDE) as string
+  assert.equal(insertHarborInclude(once, INCLUDE), null)
+})
+
+check('disconnect restores the original byte for byte', () => {
+  const connected = insertHarborInclude(NGINX_CONF, INCLUDE) as string
+  const restored = removeHarborInclude(connected, INCLUDE)
+  assert.equal(restored, NGINX_CONF)
+})
+
+check('disconnecting an unconnected config is a no-op', () => {
+  assert.equal(removeHarborInclude(NGINX_CONF, INCLUDE), null)
+})
+
+check('a config with no http block is rejected, not corrupted', () => {
+  assert.throws(
+    () => insertHarborInclude('events {\n  worker_connections 1024;\n}\n', INCLUDE),
+    /no top-level http/i
+  )
 })
 
 const run = async (): Promise<void> => {

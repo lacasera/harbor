@@ -76,6 +76,12 @@ export class HarborApp {
   async start(): Promise<void> {
     this.processes.startUsagePolling()
     this.projects.nginx.ensureRootConfig()
+
+    // Vhosts are otherwise only written on park/update, so a deleted file, a
+    // changed TLD or a newly issued certificate would leave nginx serving
+    // stale config until the user touched each project.
+    await this.projects.rewriteAllVhosts()
+
     if (this.store.get().settings.autoStartServices) {
       await this.services.autoStart()
     }
