@@ -98,6 +98,14 @@ void (async () => {
     }
   } finally {
     await harbor.projects.stopAllProcesses(project.id).catch(() => undefined)
+
+    // A run interrupted between add and remove would otherwise leave its
+    // process behind and fail every later run — which is exactly what happened.
+    for (const p of (await harbor.projects.describeProcesses(harbor.projects.find(project.id)))) {
+      if (p.custom && p.label.startsWith('Harbor probe')) {
+        await harbor.projects.removeProcess(project.id, p.id).catch(() => undefined)
+      }
+    }
     // Restore Harbor's own recommendation rather than leaving it switched off.
     await harbor.projects.updateProcess(project.id, 'queue', { enabled: true }).catch(() => undefined)
     harbor.store.flush()
