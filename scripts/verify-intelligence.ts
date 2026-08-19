@@ -55,7 +55,13 @@ async function main(): Promise<void> {
     // Assert that it found something and that what it found is coherent — an
     // arbitrary size threshold just fails on small, correctly-parsed apps.
     step('found models in a real codebase', entities.length > 0, `${entities.length} entities`)
-    step('found relations', relations.length > 0, `${relations.length} relations`)
+    // A one-model skeleton genuinely has nothing to relate; only assert this
+    // where relations should exist.
+    if (entities.length > 1) {
+      step('found relations', relations.length > 0, `${relations.length} relations`)
+    } else {
+      console.log(`  ..   ${entities.length} model(s); no relations expected`)
+    }
     step('completes quickly', ms < 3000, `${ms}ms`)
 
     step(
