@@ -270,6 +270,13 @@ export function interpolate(template: string, scope: Record<string, unknown>): s
 // schemas are stable for the process lifetime.
 const ajv = new Ajv({ allErrors: true, coerceTypes: true, useDefaults: false, strict: false })
 
+// `format` in a driver schema is a UI hint — which control the form renders —
+// not a validation rule. Registering them as always-valid documents that and
+// stops Ajv warning about an unknown format on every compile.
+for (const hint of ['password', 'port', 'path', 'directory', 'uri', 'email']) {
+  ajv.addFormat(hint, () => true)
+}
+
 /** Schema violations, addressed to the field that caused each one. */
 export function validate(schema: JSONSchema, values: Record<string, unknown>): FieldError[] {
   const check = ajv.compile(schema as object)

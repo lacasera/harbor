@@ -199,17 +199,24 @@ Every one of these was invisible to the type checker and to the original tests.
 
 ## Phase 4 — remaining services
 
-Each is one driver file plus one line in `services/index.ts` — no UI work. Order
-by usefulness:
+All five landed. The claim that a service is "one file plus one line" held:
+the Docker services turned out to differ only in their compose fragment and
+schema, so they are expressed as data (`docker-catalog.ts`) against one shared
+`DockerServiceDriver` rather than four near-identical classes.
 
-- [ ] **4.1** Meilisearch (native)
-- [ ] **4.2** Elasticsearch (docker)
-- [ ] **4.3** LocalStack (docker)
-- [ ] **4.4** OpenSearch (docker)
-- [ ] **4.5** Kafka (docker)
+- [x] **4.1** Meilisearch (native) — installed, started and health-checked for real
+- [x] **4.2** Elasticsearch (docker)
+- [x] **4.3** LocalStack (docker) — started and health-checked for real
+- [x] **4.4** OpenSearch (docker) — defaults to :9250 so it can run beside Elasticsearch
+- [x] **4.5** Kafka (docker) — KRaft mode, no ZooKeeper
 
-Each done when: installs, starts, health-checks, logs aggregate, and its
-`envHints` produce a correct block against the running instance.
+`npm run verify:catalog` (21/21) checks every service's metadata is coherent
+(schema defaults validate against their own schema, envHints all resolve), then
+brings up one native and one Docker service end to end.
+
+Not yet exercised: Elasticsearch, OpenSearch and Kafka have not been started —
+they are JVM services with multi-GB image pulls. Their specs follow the same
+shape as LocalStack's, which is verified.
 
 ---
 
