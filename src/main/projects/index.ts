@@ -21,12 +21,15 @@ import type { RuntimeManager } from '../runtimes/index.js'
 import type { PhpRuntime } from '../runtimes/php.js'
 import type { PhpFpmManager } from '../runtimes/php-fpm.js'
 import type { NativeBackend } from '../backends/native-backend.js'
+import type { DockerBackend } from '../backends/docker-backend.js'
 import type { PrivilegedHelper } from '../core/privileged-helper.js'
-import { paths } from '../core/paths.js'
+import { LEGACY_COMPOSE_PROJECT, composeProjectName, paths } from '../core/paths.js'
+import { MACHINE_OWNER } from '../../shared/service.js'
 import { binDirOf, resolveBinary } from '../core/resolve-binary.js'
 import { matchVersion } from '../runtimes/version-resolver.js'
 import { NginxManager, type VhostContext } from './nginx-manager.js'
 import type { TlsManager } from './tls.js'
+import type { ServiceInstances } from '../services/instances.js'
 import { PhpFrameworkRegistry, createPhpFrameworkRegistry } from './php-frameworks/index.js'
 import { PhpProjectType } from './types/php.js'
 import { NodeServerProjectType } from './types/node-server.js'
@@ -43,6 +46,7 @@ export interface ProjectManagerDeps {
   native: NativeBackend
   privileged: PrivilegedHelper
   tls: TlsManager
+  docker: DockerBackend
 }
 
 export class ProjectManager extends EventEmitter {
@@ -50,6 +54,8 @@ export class ProjectManager extends EventEmitter {
   readonly frameworks: PhpFrameworkRegistry = createPhpFrameworkRegistry()
   readonly nginx: NginxManager
   private readonly staticType = new StaticProjectType()
+  /** Set by `attachServices`; absent only in tests that do not need services. */
+  private services: ServiceInstances | null = null
 
   constructor(private readonly deps: ProjectManagerDeps) {
     super()
@@ -80,6 +86,39 @@ export class ProjectManager extends EventEmitter {
       if (await type.detect(dir)) return type
     }
     return this.staticType
+  }
+
+  // ── services ────────────────────────────────────────────────────────────
+
+  /**
+   * Wired after construction. ServiceInstances needs a project's compose
+   * project name to run anything, and this manager needs ServiceInstances to
+   * describe a project — a genuine cycle, broken by injecting the later half.
+   */
+  attachServices(services: ServiceInstances): void {
+    this.services = services
+  }
+
+  /**
+   * The compose namespace an owner's containers live in.
+   *
+   * Read off the stored Project rather than derived from its name: the name can
+   * change, and re-deriving would point Harbor at a namespace that has none of
+   * the running containers or volumes in it — orphaning a whole stack, data
+   * included, with nothing to indicate it happened.
+   */
+  composeProjectFor(owner: string): string {
+    const project = this.deps.store.get().projects.find((p) => p.id === owner)
+    if (project?.composeProject) return project.composeProject
+    // The machine owner runs only native services, so its namespace is never
+    // used; anything else gets its own rather than sharing, because sharing is
+    // precisely the bug this whole change exists to fix.
+    return owner === MACHINE_OWNER ? LEGACY_COMPOSE_PROJECT : composeProjectName(owner)
+  }
+
+  /** A human name for an owner: the project's, or the owner id as a fallback. */
+  ownerNameFor(owner: string): string {
+    return this.deps.store.get().projects.find((p) => p.id === owner)?.name ?? owner
   }
 
   // ── registry ────────────────────────────────────────────────────────────
@@ -141,7 +180,10 @@ export class ProjectManager extends EventEmitter {
       port: null,
       startCommandOverride: null,
       runtimeOverride: null,
-      serviceIds: [],
+      composeProject: composeProjectName(
+        name,
+        this.deps.store.get().projects.map((p) => p.composeProject)
+      ),
       processOverrides: {},
       customProcesses: [],
       createdAt: Date.now()
@@ -172,6 +214,8 @@ export class ProjectManager extends EventEmitter {
     written: number
     removed: number
     failed: Array<[string, string]>
+    /** Set when nginx refused the result, so no reload happened. */
+    configError: string | null
   }> {
     const failed: Array<[string, string]> = []
     let written = 0
@@ -219,11 +263,25 @@ export class ProjectManager extends EventEmitter {
       }
     }
 
+    let configError: string | null = null
     if ((written || removed) && this.nginx.isConnected()) {
       const check = await this.nginx.test()
-      if (check.ok) await this.nginx.reload().catch(() => undefined)
+      if (check.syntaxOk) {
+        await this.nginx.reload().catch((err: Error) => {
+          configError = err.message
+        })
+      } else {
+        // Reported, not merely skipped. nginx keeps serving the last config it
+        // loaded, so a rejected one is invisible: new sites simply never appear
+        // and the catch-all answers them, with nothing anywhere saying why.
+        configError = check.output.trim().split('\n').slice(-2).join(' ')
+      }
     }
-    return { written, removed, failed }
+
+    if (configError) {
+      this.deps.logs.push('harbor', 'nginx', `config not reloaded — ${configError}`)
+    }
+    return { written, removed, failed, configError }
   }
 
   /**
@@ -272,16 +330,57 @@ export class ProjectManager extends EventEmitter {
     return { renamed, failed }
   }
 
-  async forget(id: string): Promise<void> {
+  /**
+   * Stop serving a project and drop it from Harbor.
+   *
+   * Its service stack goes with it. Without this a forgotten project silently
+   * leaks a whole set of containers: nothing else references the compose
+   * project, so nothing would ever stop or clean them up.
+   *
+   * Volumes are kept unless `destroyData` is asked for. Forgetting a project is
+   * a routine, reversible action — re-park the directory and it comes back —
+   * and it must not be the thing that deletes the user's database.
+   */
+  async forget(id: string, options: { destroyData?: boolean } = {}): Promise<void> {
     const project = this.find(id)
     await this.stopAllProcesses(id)
+    await this.teardownStack(project, options.destroyData ?? false)
     this.deps.logs.detach(id)
     this.nginx.remove(project)
-    this.deps.ports.release(`project:${id}`)
-    this.emit('forgotten', id)
+    this.deps.ports.releasePrefix(`project:${id}`)
+    this.deps.ports.releasePrefix(`service:${id}:`)
     this.deps.store.update((s) => {
       s.projects = s.projects.filter((p) => p.id !== id)
     })
+
+    // Removing the vhost file is not enough on its own: nginx serves the config
+    // it loaded, so without this the site of a forgotten project keeps
+    // answering until something else happens to reload.
+    await this.nginx.reload().catch(() => undefined)
+
+    // Emitted last, so anything listening sees a store the project is already
+    // gone from rather than one it is still in.
+    this.emit('forgotten', id)
+  }
+
+  /** Stop and remove every service instance a project owns. */
+  private async teardownStack(project: Project, destroyData: boolean): Promise<void> {
+    const services = this.services
+    if (!services) return
+    const instances = services.forOwner(project.id)
+    if (!instances.length) return
+
+    for (const instance of instances) {
+      await services.detach({ owner: project.id, serviceId: instance.serviceId }).catch(() => undefined)
+    }
+    // Detaching stops each container; `down` removes them and the network, and
+    // is scoped by compose project name so it can never reach a stack the user
+    // runs themselves.
+    if (project.composeProject) {
+      await this.deps.docker
+        .down(project.composeProject, { volumes: destroyData })
+        .catch(() => undefined)
+    }
   }
 
   async update(
@@ -291,7 +390,6 @@ export class ProjectManager extends EventEmitter {
       startCommandOverride?: string | null
       runtimeOverride?: { runtime: RuntimeId; version: string } | null
       secure?: boolean
-      serviceIds?: string[]
       redetectType?: boolean
     }
   ): Promise<ProjectDescriptor> {
@@ -336,7 +434,6 @@ export class ProjectManager extends EventEmitter {
       }
     }
     if (patch.secure !== undefined) project.secure = patch.secure
-    if (patch.serviceIds !== undefined) project.serviceIds = patch.serviceIds
 
     this.deps.store.update((s) => {
       const idx = s.projects.findIndex((p) => p.id === id)
@@ -674,6 +771,7 @@ export class ProjectManager extends EventEmitter {
       await this.ensureFpmFor(project)
       await this.writeVhost(project)
       await this.startEnabledProcesses(project)
+      await this.services?.startOwner(id)
       return this.emitChanged(project)
     }
 
@@ -729,9 +827,12 @@ export class ProjectManager extends EventEmitter {
   }
 
   async stop(id: string): Promise<ProjectDescriptor> {
-    // Stops the server and every companion: leaving a queue worker running for
-    // a stopped site is a good way to be confused later.
+    // Stops the server, every companion, and the project's service stack:
+    // leaving a queue worker running for a stopped site is a good way to be
+    // confused later, and leaving its database up is ~500 MiB of a ~4 GiB
+    // Docker VM held for a site nobody is serving.
     await this.stopAllProcesses(id)
+    await this.services?.stopOwner(id)
     return this.emitChanged(this.find(id))
   }
 
@@ -754,8 +855,6 @@ export class ProjectManager extends EventEmitter {
     const serving = await this.servingState(project, handle?.state === 'running', handle?.pid ?? null)
     return {
       ...project,
-      // Projects persisted before this field existed have no array.
-      serviceIds: project.serviceIds ?? [],
       processOverrides: project.processOverrides ?? {},
       customProcesses: project.customProcesses ?? [],
       processes: await this.describeProcesses(project).catch(() => []),

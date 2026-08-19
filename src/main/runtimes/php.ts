@@ -1,9 +1,13 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { exec as execCb } from 'node:child_process'
+import { promisify } from 'node:util'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import type { RuntimeDriver } from '../../shared/runtime.js'
+import { basename, dirname, join } from 'node:path'
+import type { RuntimeConfigFileSpec, RuntimeDriver, UpdateInfo } from '../../shared/runtime.js'
 import type { NativeBackend } from '../backends/native-backend.js'
 import { paths } from '../core/paths.js'
+
+const exec = promisify(execCb)
 
 /** Offered for installation. What is *installed* is discovered, not listed. */
 const INSTALLABLE = ['8.5', '8.4', '8.3', '8.2', '8.1']
@@ -94,6 +98,162 @@ export class PhpRuntime implements RuntimeDriver {
    */
   fpmSocket(version: string): string {
     return join(paths.run, `php${version.replace('.', '')}-fpm.sock`)
+  }
+
+  /**
+   * The directory PHP scans for extra ini files, on top of Homebrew's own.
+   *
+   * Harbor's overrides live here rather than in the user's `php.ini`. Editing
+   * theirs would mean writing to a file Homebrew owns and replaces on upgrade,
+   * and it is the same file their terminal `php` reads — so a change made to
+   * fix one site would silently follow every script they run.
+   */
+  overrideDir(version: string): string {
+    return join(paths.php, version, 'conf.d')
+  }
+
+  /** Homebrew keeps a version's config outside the keg so upgrades preserve it. */
+  systemIni(version: string): string | null {
+    const prefix = this.native.brewPrefix()
+    if (!prefix) return null
+    const ini = join(prefix, 'etc', 'php', version, 'php.ini')
+    return existsSync(ini) ? ini : null
+  }
+
+  configFiles(version: string): RuntimeConfigFileSpec[] {
+    const files: RuntimeConfigFileSpec[] = [
+      {
+        id: 'overrides',
+        label: 'Harbor overrides',
+        path: join(this.overrideDir(version), 'harbor.ini'),
+        owner: 'harbor',
+        scope: `Sites Harbor serves with PHP ${version}. Applied on top of php.ini.`,
+        description:
+          'Loaded after php.ini and after Homebrew\'s conf.d, so anything set here wins. ' +
+          'Saving restarts the PHP-FPM pool.'
+      }
+    ]
+
+    const ini = this.systemIni(version)
+    if (ini) {
+      files.push({
+        id: 'php.ini',
+        label: 'php.ini',
+        path: ini,
+        owner: 'system',
+        scope: `Every PHP ${version} process on this machine, including your terminal.`,
+        description:
+          'Homebrew owns this file and may replace it when PHP is upgraded. ' +
+          'Prefer the overrides above unless you want the change everywhere.'
+      })
+    }
+    return files
+  }
+
+  /**
+   * The Homebrew formula backing a version, resolved through its alias.
+   *
+   * `php@8.5` exists as an alias of the unversioned `php` formula while 8.5 is
+   * current, so the opt path is present under both names — but `brew outdated`
+   * reports only the canonical one. Matching on the alias found nothing and
+   * reported a version that was five patches behind as up to date.
+   *
+   * The Cellar path answers it for free: `opt/php@8.5` resolves to
+   * `Cellar/php/8.5.4`, and the directory under Cellar IS the formula name.
+   */
+  private formulaFor(version: string): { formula: string; installed: string } {
+    const prefix = this.native.brewPrefix()
+    const fallback = { formula: `php@${version}`, installed: version }
+    if (!prefix) return fallback
+
+    for (const name of [`php@${version}`, 'php']) {
+      const opt = join(prefix, 'opt', name)
+      if (!existsSync(join(opt, 'bin', 'php'))) continue
+      try {
+        const cellar = realpathSync(opt)
+        const installed = basename(cellar)
+        const formula = basename(dirname(cellar))
+        // The unversioned formula moves between minors; only claim it when it
+        // is actually the version being asked about.
+        if (!installed.startsWith(`${version}.`)) continue
+        return { formula, installed }
+      } catch {
+        continue
+      }
+    }
+    return fallback
+  }
+
+  /**
+   * Asked of Homebrew, not of php.net.
+   *
+   * PHP is not installed side by side under Harbor's own directory — it comes
+   * from a formula and is upgraded in place. So the only truthful answer to
+   * "is there an update" is the one Homebrew gives, and the only honest way to
+   * apply it is `brew upgrade`.
+   */
+  async checkUpdate(version: string): Promise<UpdateInfo> {
+    const brew = this.native.brewPrefix()
+    const { formula, installed } = this.formulaFor(version)
+    if (!brew) {
+      return {
+        current: version,
+        latest: null,
+        available: false,
+        major: false,
+        action: 'Homebrew is not installed',
+        error: 'Homebrew is not installed'
+      }
+    }
+
+    try {
+      const { stdout } = await exec(`${join(brew, 'bin', 'brew')} outdated --json=v2`, {
+        maxBuffer: 16 * 1024 * 1024
+      })
+      const parsed = JSON.parse(stdout) as {
+        formulae?: Array<{ name: string; installed_versions: string[]; current_version: string }>
+      }
+      const entry = parsed.formulae?.find((f) => f.name === formula)
+      if (!entry) {
+        return {
+          current: installed,
+          latest: installed,
+          available: false,
+          major: false,
+          action: 'Up to date'
+        }
+      }
+      return {
+        current: entry.installed_versions[0] ?? installed,
+        latest: entry.current_version,
+        // Homebrew keeps a formula on its own line, so an upgrade of php@8.5
+        // never becomes 8.6. The unversioned `php` formula can move a minor,
+        // which is worth flagging before a one-click upgrade.
+        available: true,
+        major: formula === 'php' && !entry.current_version.startsWith(`${version}.`),
+        action: `brew upgrade ${formula}`
+      }
+    } catch (err) {
+      return {
+        current: installed,
+        latest: null,
+        available: false,
+        major: false,
+        action: `brew upgrade ${formula}`,
+        error: (err as Error).message
+      }
+    }
+  }
+
+  /** In place: this replaces the installed PHP rather than adding one. */
+  async update(version: string): Promise<string> {
+    const brew = this.native.brewPrefix()
+    if (!brew) throw new Error('Homebrew is required to upgrade PHP')
+    const { formula } = this.formulaFor(version)
+    await exec(`${join(brew, 'bin', 'brew')} upgrade ${formula}`, {
+      maxBuffer: 64 * 1024 * 1024
+    })
+    return (await this.installedVersions())[0] ?? version
   }
 
   async install(version: string): Promise<void> {

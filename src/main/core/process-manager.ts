@@ -57,8 +57,12 @@ export class ProcessManager extends EventEmitter {
       // A login shell is not used: commands are resolved to absolute binaries by
       // the callers (see resolve-binary.ts) so we never depend on the user's PATH.
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: req.detached ?? false
     })
+    // Still tracked and still logged; only released from this process's group,
+    // so a signal aimed at the group does not take the daemon with it.
+    if (req.detached) child.unref()
 
     const managed: Managed = { handle, child }
     this.processes.set(id, managed)

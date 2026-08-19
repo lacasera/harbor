@@ -153,12 +153,24 @@ export class PhpFpmManager {
     if (existsSync(socket)) rmSync(socket, { force: true })
 
     const config = this.writeConfig(version)
+
+    // A leading colon means "the compiled-in scan dir first, then this one".
+    // Without it PHP replaces the default, and Homebrew's conf.d — where every
+    // extension is registered — stops being read at all.
+    const overrides = this.php.overrideDir(version)
+    mkdirSync(overrides, { recursive: true })
+
     await this.processes.spawn({
       owner: { kind: 'system', id: this.ownerId(version) },
       label: `php-fpm ${version}`,
       command: binary,
       // -F keeps it in the foreground; -y points at our pool, not the system's.
-      args: ['-F', '-y', config]
+      args: ['-F', '-y', config],
+      env: { PHP_INI_SCAN_DIR: `:${overrides}` },
+      // A pool serves the user's sites. It must not die because the process
+      // that happened to start it exited — a verification script that renders
+      // vhosts would otherwise leave every site returning 502.
+      detached: true
     })
 
     if (!(await this.waitForSocket(version))) {
@@ -175,6 +187,17 @@ export class PhpFpmManager {
       await new Promise((r) => setTimeout(r, 100))
     }
     return false
+  }
+
+  /**
+   * Stop and start, so a changed ini is actually read. PHP parses its
+   * configuration once at startup; a reload signal (USR2) would re-read the
+   * pool config but not the ini scan directory.
+   */
+  async restart(version: string): Promise<void> {
+    if (!(await this.isRunning(version))) return
+    await this.stop(version)
+    await this.start(version)
   }
 
   async stop(version: string): Promise<void> {

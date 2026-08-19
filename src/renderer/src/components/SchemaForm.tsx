@@ -18,13 +18,24 @@ interface FieldSpec {
   section: string
 }
 
-/** Group fields into the design's uppercase section bands. */
+/**
+ * Group fields into the design's uppercase section bands.
+ *
+ * A driver's own `section` wins. The name-sniffing below is only a fallback for
+ * schemas that declare nothing — it has no way to know what an unfamiliar field
+ * is, and filing everything it doesn't recognise under "Storage" produced bands
+ * that actively misinform.
+ */
 function sectionOf(key: string, schema: JSONSchema): string {
+  if (schema.section) return schema.section
   if (schema.format === 'password' || /user|password|key|token|secret|region/i.test(key)) {
     return 'Access'
   }
   if (schema.format === 'port' || /port|host|bind|address/i.test(key)) return 'Network'
-  return 'Storage'
+  if (schema.format === 'path' || schema.format === 'directory' || /dir|path|volume/i.test(key)) {
+    return 'Storage'
+  }
+  return 'Settings'
 }
 
 function specsFor(schema: JSONSchema): FieldSpec[] {
@@ -61,16 +72,22 @@ export function SchemaForm({
 
   const sections = useMemo(() => {
     const specs = specsFor(schema)
-    const order = ['Access', 'Network', 'Storage']
+    // Known bands first, in the order you actually need them; anything a driver
+    // named itself follows, and Advanced sinks to the bottom because it is the
+    // escape hatch rather than the thing most people came for.
+    const order = ['Network', 'Access', 'Storage', 'Settings']
     const grouped = new Map<string, FieldSpec[]>()
     for (const spec of specs) {
       const list = grouped.get(spec.section) ?? []
       list.push(spec)
       grouped.set(spec.section, list)
     }
-    return [...grouped.entries()].sort(
-      ([a], [b]) => order.indexOf(a) - order.indexOf(b)
-    )
+    const rank = (name: string): number => {
+      if (name === 'Advanced') return 1000
+      const i = order.indexOf(name)
+      return i === -1 ? 500 : i
+    }
+    return [...grouped.entries()].sort(([a], [b]) => rank(a) - rank(b))
   }, [schema])
 
   const dirty = useMemo(
@@ -224,6 +241,22 @@ function Control({
           {revealed ? 'Hide' : 'Reveal'}
         </button>
       </>
+    )
+  }
+
+  // Multi-line by nature: extra server flags, environment lines and a mounted
+  // config file are all "one per line", and a single-line input turns them into
+  // something you have to scroll horizontally to read.
+  if (schema.format === 'textarea') {
+    return (
+      <textarea
+        className={`field-input mono ${invalid ? 'invalid' : ''}`}
+        style={{ width: 400, maxWidth: '100%', minHeight: 84, resize: 'vertical', padding: 8 }}
+        value={String(value ?? '')}
+        spellCheck={false}
+        placeholder={schema.description ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+      />
     )
   }
 

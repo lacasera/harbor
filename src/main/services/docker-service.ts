@@ -1,11 +1,15 @@
 import { connect } from 'node:net'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import type { JSONSchema } from '../../shared/json-schema.js'
 import type { LogSource } from '../../shared/logs.js'
 import type { ProcessHandle } from '../../shared/process.js'
 import type {
-  ServiceConfig,
+  ServiceConsole,
   ServiceDriver,
   ServiceIconKind,
+  ServiceInstance,
+  ServiceInstanceRef,
   ServiceStatus
 } from '../../shared/service.js'
 import type { ComposeFragment, DockerBackend } from '../backends/docker-backend.js'
@@ -28,7 +32,20 @@ export interface DockerServiceSpec {
   configSchema: JSONSchema
   envHints: Record<string, string>
   /** Compose definition for one instance, given its live config. */
-  fragment(config: ServiceConfig, version: string): ComposeFragment
+  fragment(instance: ServiceInstance, version: string): ComposeFragment
+  /**
+   * The image's own command, e.g. `['mysqld']`. Declaring it turns on the
+   * per-instance "extra arguments" field: the arguments are appended to this,
+   * and without knowing the base there is nothing safe to append to — setting
+   * `command` to the extras alone would replace the server with them.
+   */
+  commandBase?: string[]
+  /**
+   * Where a per-instance config file is mounted, e.g.
+   * `/etc/mysql/conf.d/harbor.cnf`. Declaring it turns on the "extra
+   * configuration" field. Services that do not set it simply do not offer one.
+   */
+  configMount?: string
   /**
    * Optional HTTP path probed on the first configured port. Container state
    * alone only proves the process exists, not that the service is ready.
@@ -48,20 +65,38 @@ export interface DockerServiceSpec {
   healthPortIndex?: number
   /** Treated as healthy; some services return 503 while still usable locally. */
   healthAcceptStatuses?: number[]
+  /** The service's own web UI, if it has one. See `consoleAt`. */
+  console?(instance: ServiceInstance): ServiceConsole | null
+  /**
+   * A command run inside the container once it is healthy, to reconcile the
+   * server with settings its image only honours when initialising an empty
+   * volume — creating the configured database, granting the configured user.
+   *
+   * Must be idempotent: it runs on every start, not just the first.
+   */
+  bootstrap?(instance: ServiceInstance): BootstrapStep | null
 }
+
+/** A reconciliation command, with what to feed its stdin. */
+export interface BootstrapStep {
+  /** Shown in the log so a failure names what was being attempted. */
+  label: string
+  command: string[]
+  stdin?: string
+}
+
+/** Config keys the driver owns rather than the spec. */
+export const EXTRA_ARGS = 'extraArgs'
+export const EXTRA_ENV = 'extraEnv'
+export const EXTRA_CONFIG = 'extraConfig'
 
 export class DockerServiceDriver implements ServiceDriver {
   readonly backend = 'docker' as const
-  readonly logSources: LogSource[]
-
-  private running: ServiceConfig | null = null
 
   constructor(
     private readonly docker: DockerBackend,
     private readonly spec: DockerServiceSpec
-  ) {
-    this.logSources = [{ kind: 'stdout', label: spec.id }]
-  }
+  ) {}
 
   get id(): string {
     return this.spec.id
@@ -81,11 +116,59 @@ export class DockerServiceDriver implements ServiceDriver {
   get tint(): string {
     return this.spec.tint
   }
-  get configSchema(): JSONSchema {
-    return this.spec.configSchema
-  }
   get envHints(): Record<string, string> {
     return this.spec.envHints
+  }
+
+  /**
+   * The spec's schema plus the escape hatches every Docker service inherits.
+   *
+   * A schema field is the better answer whenever one exists — it gets a real
+   * form control, validation and an `.env` reference for free — but no schema
+   * will ever cover every server setting a project needs, and a user who cannot
+   * express one has no route at all. These three cover the rest, uniformly, so
+   * no service grows a bespoke "advanced" panel.
+   */
+  get configSchema(): JSONSchema {
+    const properties: Record<string, JSONSchema> = { ...(this.spec.configSchema.properties ?? {}) }
+    if (this.spec.commandBase) {
+      properties[EXTRA_ARGS] = {
+        type: 'string',
+        title: 'Extra arguments',
+        section: 'Advanced',
+        description: `Appended to \`${this.spec.commandBase.join(' ')}\`, one per line`,
+        format: 'textarea',
+        default: ''
+      }
+    }
+    properties[EXTRA_ENV] = {
+      type: 'string',
+      title: 'Extra environment',
+      section: 'Advanced',
+      description: 'KEY=value, one per line',
+      format: 'textarea',
+      default: ''
+    }
+    if (this.spec.configMount) {
+      properties[EXTRA_CONFIG] = {
+        type: 'string',
+        title: 'Extra configuration',
+        section: 'Advanced',
+        description: `Mounted read-only at ${this.spec.configMount}`,
+        format: 'textarea',
+        default: ''
+      }
+    }
+    return { ...this.spec.configSchema, properties }
+  }
+
+  console(instance: ServiceInstance): ServiceConsole | null {
+    return this.spec.console?.(instance) ?? null
+  }
+
+  /** Per instance: two projects' containers must not share a log stream. */
+  logSources(ref: ServiceInstanceRef): LogSource[] {
+    return [{ kind: 'stdout', label: `${ref.owner}:${ref.serviceId}` }]
   }
 
   async availableVersions(): Promise<string[]> {
@@ -105,36 +188,87 @@ export class DockerServiceDriver implements ServiceDriver {
     // No-op: `docker compose up -d` pulls the image on demand.
   }
 
-  private versionFor(config: ServiceConfig): string {
+  private versionFor(instance: ServiceInstance): string {
     const first = this.spec.versions[0] as string
-    return config.version === 'latest' || !this.spec.versions.includes(config.version)
+    return instance.version === 'latest' || !this.spec.versions.includes(instance.version)
       ? first
-      : config.version
+      : instance.version
   }
 
-  async start(config: ServiceConfig): Promise<ProcessHandle> {
+  /**
+   * The spec's fragment, plus everything that is true of every Docker service:
+   * ownership labels, the user's extra arguments, environment and config file.
+   *
+   * Labels are what make a stray container attributable later. Without them a
+   * container left behind by a crash is just a name, and reconciling it means
+   * pattern-matching names — which is how a tool ends up removing one of the
+   * user's own containers.
+   */
+  buildFragment(instance: ServiceInstance): ComposeFragment {
+    const fragment = this.spec.fragment(instance, this.versionFor(instance))
+    const definition = fragment.services[this.spec.id] as Record<string, unknown> | undefined
+    if (!definition) return fragment
+
+    definition.labels = {
+      ...((definition.labels as Record<string, string>) ?? {}),
+      'com.harbor.owner': instance.owner,
+      'com.harbor.service': instance.serviceId
+    }
+
+    // Appended to whatever the fragment already built, not to `commandBase`
+    // alone: a spec that turns config fields into flags (MySQL's binlog options)
+    // has already put them in `command`, and replacing it would silently drop
+    // every setting the user made through the form in favour of the raw ones.
+    const extraArgs = parseLines(instance.values[EXTRA_ARGS])
+    if (this.spec.commandBase && extraArgs.length) {
+      const base = (definition.command as string[] | undefined) ?? this.spec.commandBase
+      definition.command = [...base, ...extraArgs]
+    }
+
+    const extraEnv = parseEnvLines(instance.values[EXTRA_ENV])
+    if (Object.keys(extraEnv).length) {
+      definition.environment = {
+        ...((definition.environment as Record<string, string>) ?? {}),
+        ...extraEnv
+      }
+    }
+
+    const extraConfig = String(instance.values[EXTRA_CONFIG] ?? '').trim()
+    if (this.spec.configMount && extraConfig) {
+      const dir = join(this.docker.configDir(instance.owner), instance.serviceId)
+      mkdirSync(dir, { recursive: true })
+      const host = join(dir, basename(this.spec.configMount))
+      writeFileSync(host, `${extraConfig}\n`, 'utf8')
+      definition.volumes = [
+        ...((definition.volumes as string[]) ?? []),
+        `${host}:${this.spec.configMount}:ro`
+      ]
+    }
+
+    return fragment
+  }
+
+  async start(instance: ServiceInstance): Promise<ProcessHandle> {
     const available = await this.docker.available()
     if (!available.ok) throw new Error(available.reason ?? 'Docker is not available')
 
-    this.running = config
     return this.docker.start({
-      serviceId: this.spec.id,
-      displayName: this.spec.displayName,
-      fragment: this.spec.fragment(config, this.versionFor(config))
+      ref: { owner: instance.owner, serviceId: instance.serviceId },
+      displayName: this.spec.displayName
     })
   }
 
-  async stop(): Promise<void> {
-    await this.docker.stop(this.spec.id)
-    this.running = null
+  async stop(instance: ServiceInstance): Promise<void> {
+    await this.docker.stop({ owner: instance.owner, serviceId: instance.serviceId })
   }
 
-  private portAccepts(port: number): Promise<boolean> {
-    return portAccepts(port)
-  }
-
-  configuredPorts(config: ServiceConfig): number[] {
-    const values = config.values ?? {}
+  /**
+   * Ports this instance binds on the host. Read straight off the instance,
+   * where the allocator wrote them — the driver keeps no notion of "the"
+   * running config, which is what made a restarted service report defaults.
+   */
+  configuredPorts(instance: ServiceInstance): number[] {
+    const values = instance.values ?? {}
     const primary = Number(values.port ?? this.spec.defaultPorts[0])
     const rest = this.spec.defaultPorts.slice(1).map((p, i) => {
       const key = ['secondaryPort', 'tertiaryPort'][i]
@@ -143,18 +277,52 @@ export class DockerServiceDriver implements ServiceDriver {
     return [primary, ...rest]
   }
 
-  private ports(): number[] {
-    const values = this.running?.values ?? {}
-    const primary = Number(values.port ?? this.spec.defaultPorts[0])
-    const rest = this.spec.defaultPorts.slice(1).map((p, i) => {
-      const key = ['secondaryPort', 'tertiaryPort'][i]
-      return key && values[key] !== undefined ? Number(values[key]) : p
-    })
-    return [primary, ...rest]
+  /**
+   * Wait for the container to be usable, then run the spec's reconciliation.
+   *
+   * The wait is the whole reason this cannot be part of `start()`: a first run
+   * pulls an image and initialises a data directory, and MySQL refuses
+   * connections for a good while after `up -d` returns.
+   *
+   * Readiness is decided by retrying the command itself rather than by the
+   * health check. Docker's port proxy binds the published port the moment the
+   * container starts, so a TCP probe succeeds while the server inside is still
+   * initialising — `healthTcp` reports running and the first connection is
+   * still refused. Whether the command works is the only honest test of
+   * whether the command can be run.
+   */
+  async bootstrap(instance: ServiceInstance): Promise<void> {
+    const step = this.spec.bootstrap?.(instance)
+    if (!step) return
+
+    const ref = { owner: instance.owner, serviceId: instance.serviceId }
+    let lastError: Error | null = null
+
+    for (let i = 0; i < 120; i++) {
+      const state = (await this.docker.containerState(ref).catch(() => null))?.toLowerCase()
+      if (state === 'running') {
+        try {
+          await this.docker.exec(ref, step.command, step.stdin)
+          return
+        } catch (err) {
+          lastError = err as Error
+        }
+      } else if (!state && i > 5) {
+        // The container went away rather than starting; nothing to reconcile.
+        return
+      }
+      await delay(1000)
+    }
+
+    throw new Error(
+      `${this.spec.displayName}: ${step.label} — ` +
+        `not ready after 2 minutes${lastError ? ` (${lastError.message.split('\n')[0]})` : ''}`
+    )
   }
 
-  async healthCheck(): Promise<ServiceStatus> {
-    const state = await this.docker.containerState(this.spec.id)
+  async healthCheck(instance: ServiceInstance): Promise<ServiceStatus> {
+    const ref = { owner: instance.owner, serviceId: instance.serviceId }
+    const state = await this.docker.containerState(ref)
     if (!state) return { health: 'stopped', ports: [] }
 
     const lower = state.toLowerCase()
@@ -162,12 +330,11 @@ export class DockerServiceDriver implements ServiceDriver {
       return { health: lower === 'restarting' ? 'starting' : 'stopped', ports: [] }
     }
 
-    const ports = this.ports()
-
+    const ports = this.configuredPorts(instance)
     const healthPort = ports[this.spec.healthPortIndex ?? 0] ?? (ports[0] as number)
 
     if (this.spec.healthTcp) {
-      const open = await this.portAccepts(healthPort)
+      const open = await portAccepts(healthPort)
       // A container that is up but not yet listening is starting, not broken:
       // Postgres and MySQL both take seconds to initialise on first run.
       return open
@@ -196,6 +363,32 @@ export class DockerServiceDriver implements ServiceDriver {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+function basename(path: string): string {
+  return path.split('/').pop() || 'harbor.conf'
+}
+
+/** Textarea → lines, blanks and `#` comments dropped. */
+function parseLines(raw: unknown): string[] {
+  return String(raw ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
+}
+
+function parseEnvLines(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of parseLines(raw)) {
+    const eq = line.indexOf('=')
+    if (eq <= 0) continue
+    out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+  }
+  return out
+}
+
 /** Does anything accept a TCP connection on this port? */
 function portAccepts(port: number, timeoutMs = 1500): Promise<boolean> {
   return new Promise((resolve) => {
@@ -215,7 +408,32 @@ function portAccepts(port: number, timeoutMs = 1500): Promise<boolean> {
   })
 }
 
+/**
+ * A console served on one of the instance's configured ports.
+ *
+ * Bound to a config field rather than a fixed number: the user can move the
+ * port, and a link to where it used to be is worse than no link.
+ */
+export function consoleAt(
+  label: string,
+  portField: string,
+  path = '/'
+): (instance: ServiceInstance) => ServiceConsole | null {
+  return (instance) => {
+    const port = Number(instance.values[portField])
+    return port ? { label, url: `http://127.0.0.1:${port}${path}` } : null
+  }
+}
+
 /** Port field shared by every Docker service's schema. */
 export function portField(title: string, dflt: number): JSONSchema {
-  return { type: 'integer', title, format: 'port', default: dflt, minimum: 1024, maximum: 65535 }
+  return {
+    type: 'integer',
+    title,
+    section: 'Network',
+    format: 'port',
+    default: dflt,
+    minimum: 1024,
+    maximum: 65535
+  }
 }

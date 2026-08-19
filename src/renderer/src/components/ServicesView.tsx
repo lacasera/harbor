@@ -1,29 +1,34 @@
 import { useMemo, useState } from 'react'
-import type { ServiceDescriptor } from '../../../shared/service.js'
-import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
+import type { ServiceDescriptor, ServiceInstanceDescriptor } from '../../../shared/service.js'
 import { invoke } from '../ipc/client.js'
-import { StatusDot, Toggle, formatBytes, statusOf, usageForOwner } from './primitives.js'
+import { StatusDot } from './primitives.js'
 import { ServiceIcon } from './ServiceIcon.js'
 
+/**
+ * The service catalogue: what each service is, and how many projects use it.
+ *
+ * Services are no longer things that run — instances are. A card here is a
+ * catalogue entry, so it says how much a service is used and nothing more.
+ * Starting, configuring and connecting to one happens on the project that owns
+ * it, because that is the only place the question "which MySQL?" has an answer.
+ */
 export function ServicesView({
   services,
-  processes,
-  usage,
   onOpen,
   onChanged
 }: {
   services: ServiceDescriptor[]
-  processes: ProcessHandle[]
-  usage: ResourceUsage[]
   onOpen: (id: string) => void
-  onChanged: (next: ServiceDescriptor) => void
+  onChanged: (next: ServiceInstanceDescriptor) => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const names = useMemo(() => services.map((s) => s.displayName), [services])
-
-  const run = async (id: string, fn: () => Promise<ServiceDescriptor | void>): Promise<void> => {
-    setBusy(id)
+  const run = async (
+    key: string,
+    fn: () => Promise<ServiceInstanceDescriptor | void>
+  ): Promise<void> => {
+    setBusy(key)
     setError(null)
     try {
       const next = await fn()
@@ -35,8 +40,8 @@ export function ServicesView({
     }
   }
 
-  const running = services.filter((s) => s.status.health === 'running').length
-  const installed = services.filter((s) => s.installed).length
+  const instances = services.flatMap((s) => s.instances)
+  const running = instances.filter((i) => i.status.health === 'running')
 
   return (
     <>
@@ -44,19 +49,21 @@ export function ServicesView({
         <div>
           <div className="page-title">Services</div>
           <div className="page-sub">
-            {running} running · {installed} installed · {services.length} in catalog
+            {running.length} running · {instances.length} attached · {services.length} in catalog
           </div>
         </div>
         <div className="hstack">
           <button
             type="button"
             className="btn"
-            disabled={!running}
+            disabled={!running.length}
             onClick={() =>
               void Promise.all(
-                services
-                  .filter((s) => s.status.health === 'running')
-                  .map((s) => run(s.id, () => invoke('services:stop', s.id)))
+                running.map((i) =>
+                  run(i.key, () =>
+                    invoke('services:stop', { owner: i.owner, serviceId: i.serviceId })
+                  )
+                )
               )
             }
           >
@@ -68,103 +75,75 @@ export function ServicesView({
       <div className="page-body">
         {error && <p className="error-text">{error}</p>}
 
-        {!services.length ? (
-          <div className="empty">
-            <h3>No services installed</h3>
-            <p>
-              Install a service and Harbor manages its binary, ports and credentials — then hands
-              you the env vars your projects need.
-            </p>
-          </div>
-        ) : (
-          <div className="service-grid">
-            {services.map((service) => {
-              const status = statusOf(service.status.health)
-              const sample = usageForOwner(processes, usage, 'service', service.id)
-              const ports = service.status.ports.length
-                ? service.status.ports
-                : service.defaultPorts
-
-              return (
-                <div
-                  key={service.id}
-                  className="service-card"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onOpen(service.id)}
-                  onKeyDown={(e) => e.key === 'Enter' && onOpen(service.id)}
-                >
-                  <div className="top">
-                    <ServiceIcon
-                      id={service.id}
-                      displayName={service.displayName}
-                      icon={service.icon}
-                      tint={service.tint}
-                      catalogue={names}
-                    />
-                    <div className="meta">
-                      <div className="title">
-                        <span>{service.displayName}</span>
-                        <span className="mono small muted">{service.config.version}</span>
-                      </div>
-                      <div className="desc">{service.description}</div>
+        <div className="service-grid">
+          {services.map((service) => {
+            const usedBy = service.instances.length
+            const up = service.instances.filter((i) => i.status.health === 'running').length
+            return (
+              <div
+                key={service.id}
+                className="service-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpen(service.id)}
+                onKeyDown={(e) => e.key === 'Enter' && onOpen(service.id)}
+              >
+                <div className="top">
+                  <ServiceIcon
+                    id={service.id}
+                    displayName={service.displayName}
+                    icon={service.icon}
+                    tint={service.tint}
+                    catalogue={names}
+                  />
+                  <div className="meta">
+                    <div className="title">
+                      <span>{service.displayName}</span>
+                      <span className="mono small muted">
+                        {service.installedVersions[0] ?? 'latest'}
+                      </span>
                     </div>
-
-                    {service.installed ? (
-                      <Toggle
-                        on={status === 'running'}
-                        label={`Toggle ${service.displayName}`}
-                        disabled={busy === service.id}
-                        onChange={(on) =>
-                          void run(service.id, () =>
-                            on
-                              ? invoke('services:start', service.id)
-                              : invoke('services:stop', service.id)
-                          )
-                        }
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn outline-ac"
-                        disabled={busy === service.id}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void run(service.id, () =>
-                            invoke('services:install', service.id, 'latest')
-                          )
-                        }}
-                      >
-                        {busy === service.id ? 'Installing…' : 'Install'}
-                      </button>
-                    )}
+                    <div className="desc">{service.description}</div>
                   </div>
 
-                  <div className="foot">
-                    <span className="hstack" style={{ gap: 6 }}>
-                      <StatusDot status={busy === service.id ? 'busy' : status} />
-                      {busy === service.id
-                        ? 'Working…'
-                        : status === 'running'
-                          ? 'Running'
-                          : service.installed
-                            ? 'Stopped'
-                            : 'Not installed'}
-                    </span>
-                    <span className="mono small muted">:{ports.join(', ')}</span>
-                    <div className="grow" />
-                    <span className="mono small muted">
-                      {sample ? `${sample.cpu.toFixed(1)}%` : '—'}
-                    </span>
-                    <span className="mono small muted">
-                      {sample ? formatBytes(sample.memory) : '—'}
-                    </span>
-                  </div>
+                  {!service.installed && (
+                    <button
+                      type="button"
+                      className="btn outline-ac"
+                      disabled={busy === service.id}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void run(service.id, async () => {
+                          await invoke('services:install', service.id, 'latest')
+                        })
+                      }}
+                    >
+                      {busy === service.id ? 'Installing…' : 'Install'}
+                    </button>
+                  )}
                 </div>
-              )
-            })}
-          </div>
-        )}
+
+                {/*
+                    A count, not a list of names. A service can be used by any
+                    number of projects, and naming them made the card grow with
+                    the list — three projects and the grid was ragged, ten and it
+                    was unusable. Which projects, and their individual ports and
+                    controls, are on the service's own page.
+                */}
+                <div className="foot">
+                  <span className="hstack" style={{ gap: 6 }}>
+                    <StatusDot status={up ? 'running' : 'stopped'} />
+                    {usedBy
+                      ? `${usedBy} project${usedBy === 1 ? '' : 's'} · ${up} running`
+                      : 'Not used by any project'}
+                  </span>
+                  <div className="grow" />
+                  <span className="mono small muted">:{service.defaultPorts.join(', ')}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </>
   )

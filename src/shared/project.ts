@@ -94,10 +94,17 @@ export interface Project {
   /** Processes the user added themselves, beyond what the drivers detected. */
   customProcesses: ProjectProcessSpec[]
   /**
-   * Services this project uses. Drives the aggregated .env block, so it is an
-   * explicit choice rather than "whatever happens to be running".
+   * Docker compose project this project's service stack lives in, e.g.
+   * "harbor-acme". Assigned once at park and never recomputed: it names the
+   * running containers and their volumes, so re-deriving it after a rename
+   * would orphan a whole stack — and the data in it.
+   *
+   * Which services are attached is NOT stored here. Instances live in one
+   * store keyed by `owner:serviceId`, and this project's are the ones whose
+   * owner is its id. A second list would be a second source of truth, free to
+   * drift from the instances that actually exist.
    */
-  serviceIds: string[]
+  composeProject: string
   createdAt: number
 }
 
@@ -177,5 +184,12 @@ export interface ProjectDescriptor extends Project {
   servedProblem: string | null
   /** Queue workers, schedulers, asset builds — detected and user-controlled. */
   processes: ProjectProcessDescriptor[]
+  /**
+   * Service instances are NOT carried here. They are pushed to the renderer as
+   * they change, and holding a second copy on the project meant a start or a
+   * health poll updated one and left the other stale — the project's Services
+   * tab showed "Stopped" for a container that was running. A project's
+   * instances are the ones whose owner is its id.
+   */
   url: string
 }

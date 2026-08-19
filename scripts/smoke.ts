@@ -5,8 +5,8 @@
  *
  * Run with: npm run smoke
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import {
@@ -18,6 +18,9 @@ import {
 } from '../src/main/projects/nginx-manager.js'
 import { createPhpFrameworkRegistry } from '../src/main/projects/php-frameworks/index.js'
 import { interpolate, defaultsFor, validate } from '../src/main/services/registry.js'
+import { EMPTY_STATE, STATE_VERSION, migrate } from '../src/main/core/config-store.js'
+import { assertOpenable } from '../src/shared/external-url.js'
+import { checkManagedUpdate } from '../src/main/runtimes/updates.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
 import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent-erd.js'
 import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js'
@@ -75,12 +78,26 @@ const baseProject = (over: Partial<Project>): Project => ({
   port: 3100,
   startCommandOverride: null,
   runtimeOverride: null,
-  serviceIds: [],
+  composeProject: 'harbor-api',
   processOverrides: {},
   customProcesses: [],
   createdAt: 0,
   ...over
 })
+
+/**
+ * A certificate pair that exists on disk. The vhost renderer refuses to emit a
+ * path that is not there, because nginx validates its whole configuration at
+ * once and one missing file stops every site from being served.
+ */
+function makeCertPair(): { dir: string; certFile: string; keyFile: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'harbor-cert-'))
+  const certFile = join(dir, 'site.pem')
+  const keyFile = join(dir, 'site-key.pem')
+  writeFileSync(certFile, 'x')
+  writeFileSync(keyFile, 'x')
+  return { dir, certFile, keyFile }
+}
 
 // A stub nginx binary lookup keeps this test off the real filesystem.
 const nginx = new NginxManager(
@@ -134,71 +151,81 @@ check('listen ports are configurable for an unprivileged nginx', () => {
 })
 
 check('secured vhost listens on 443 with the mkcert pair', () => {
-  const conf = nginx.render({
-    project: baseProject({ secure: true }),
-    root: '/tmp/api',
-    proxyPort: 3100,
-    cert: { certFile: '/certs/api.test.pem', keyFile: '/certs/api.test-key.pem' }
-  })
-  assertWellFormed(conf)
-  assert.match(conf, /listen 443 ssl;/)
-  assert.match(conf, /ssl_certificate \/certs\/api\.test\.pem;/)
+  const { dir, certFile, keyFile } = makeCertPair()
+  try {
+    const conf = nginx.render({
+      project: baseProject({ secure: true }),
+      root: '/tmp/api',
+      proxyPort: 3100,
+      cert: { certFile, keyFile }
+    })
+    assertWellFormed(conf)
+    assert.match(conf, /listen 443 ssl;/)
+    assert.match(conf, new RegExp(`ssl_certificate ${certFile};`))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 check('an unmatched host gets a catch-all, not another project', () => {
   // Without a default server, nginx serves whichever vhost loaded first for
   // that port — so a site with a stale or missing vhost silently returns a
   // different project's content, which looks like nothing is wrong at all.
-  const dir = mkdtempSync(join(tmpdir(), 'harbor-default-'))
-  const original = process.env.HOME
-  try {
-    nginx.writeDefaultVhost({ httpPort: 80, httpsPort: 443, tld: 'test' })
-    const conf = readFileSync(join(homedir(), '.harbor', 'nginx', 'sites', '000-harbor-default.conf'), 'utf8')
+  //
+  // Rendered, never written. The written form goes to the real ~/.harbor, so
+  // this test used to overwrite the user's live catch-all with the fixture
+  // below — and nginx refused the whole configuration as a result.
+  const conf = nginx.renderDefaultVhost({ httpPort: 80, httpsPort: 443, tld: 'test' })
 
-    assertWellFormed(conf.replace(/return 404 "[\s\S]*?";/g, 'return 404;'))
-    assert.match(conf, /server_name _;/)
-    assert.match(conf, /listen 80;/)
-    assert.match(conf, /return 404/)
-    // Named to sort ahead of every domain, so nginx treats it as the default.
-    assert.ok('000-harbor-default.conf' < 'acme.test.conf')
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-    if (original) process.env.HOME = original
-  }
+  assertWellFormed(conf.replace(/return 404 "[\s\S]*?";/g, 'return 404;'))
+  assert.match(conf, /server_name _;/)
+  assert.match(conf, /listen 80;/)
+  assert.match(conf, /return 404/)
+  // Named to sort ahead of every domain, so nginx treats it as the default.
+  assert.ok('000-harbor-default.conf' < 'acme.test.conf')
 })
 
 check('the catch-all serves TLS only when a certificate exists', () => {
-  nginx.writeDefaultVhost({ httpPort: 80, httpsPort: 443, tld: 'test' })
-  const withoutCert = readFileSync(
-    join(homedir(), '.harbor', 'nginx', 'sites', '000-harbor-default.conf'),
-    'utf8'
-  )
+  const withoutCert = nginx.renderDefaultVhost({ httpPort: 80, httpsPort: 443, tld: 'test' })
   // An ssl block with no certificate would stop nginx starting entirely.
   assert.doesNotMatch(withoutCert, /listen 443 ssl/)
 
-  nginx.writeDefaultVhost({
+  // A path that does not exist counts as no certificate: nginx would refuse the
+  // whole configuration, taking every site down rather than just this block.
+  const missing = nginx.renderDefaultVhost({
     httpPort: 80,
     httpsPort: 443,
     tld: 'test',
-    cert: { certFile: '/c.pem', keyFile: '/k.pem' }
+    cert: { certFile: '/nope/c.pem', keyFile: '/nope/k.pem' }
   })
-  const withCert = readFileSync(
-    join(homedir(), '.harbor', 'nginx', 'sites', '000-harbor-default.conf'),
-    'utf8'
-  )
-  assert.match(withCert, /listen 443 ssl;/)
-  assert.match(withCert, /ssl_certificate \/c\.pem;/)
+  assert.doesNotMatch(missing, /listen 443 ssl/)
+
+  const { dir, certFile, keyFile } = makeCertPair()
+  try {
+    const withCert = nginx.renderDefaultVhost({
+      httpPort: 80,
+      httpsPort: 443,
+      tld: 'test',
+      cert: { certFile, keyFile }
+    })
+    assert.match(withCert, /listen 443 ssl;/)
+    assert.match(withCert, new RegExp(`ssl_certificate ${certFile};`))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 check('a secured site still answers on the HTTP port with a redirect', () => {
+  const { dir, certFile, keyFile } = makeCertPair()
   const conf = nginx.render({
     project: baseProject({ secure: true }),
     root: '/tmp/api',
     proxyPort: 3100,
     httpPort: 8081,
     httpsPort: 8443,
-    cert: { certFile: '/certs/api.test.pem', keyFile: '/certs/api.test-key.pem' }
+    cert: { certFile, keyFile }
   })
+  rmSync(dir, { recursive: true, force: true })
   assertWellFormed(conf)
   // Two server blocks: the redirect and the TLS site. Without the first,
   // http://<site> falls through to whichever vhost is that port's default.
@@ -209,12 +236,14 @@ check('a secured site still answers on the HTTP port with a redirect', () => {
 })
 
 check('the redirect omits the port when https is on 443', () => {
+  const { dir, certFile, keyFile } = makeCertPair()
   const conf = nginx.render({
     project: baseProject({ secure: true }),
     root: '/tmp/api',
     proxyPort: 3100,
-    cert: { certFile: '/c.pem', keyFile: '/k.pem' }
+    cert: { certFile, keyFile }
   })
+  rmSync(dir, { recursive: true, force: true })
   assertWellFormed(conf)
   assert.match(conf, /return 301 https:\/\/\$host\$request_uri;/)
 })
@@ -749,5 +778,176 @@ const run = async (): Promise<void> => {
   console.log(`\n${checks.length - failed}/${checks.length} passed`)
   if (failed) process.exit(1)
 }
+
+// ── state migration ──────────────────────────────────────────────────────
+// A migration that quietly does the wrong thing loses a user's projects, so
+// the shape changes are asserted rather than assumed.
+
+/** v1 → v3 in one step, which is what an untouched install actually does. */
+function migrateFrom(parsed: Record<string, unknown>): Record<string, unknown> {
+  const state = {
+    ...structuredClone(EMPTY_STATE),
+    ...parsed,
+    settings: { ...EMPTY_STATE.settings, ...((parsed.settings ?? {}) as object) }
+  } as never
+  return migrate(state, parsed) as unknown as Record<string, unknown>
+}
+
+check('migration keeps every project and gives each its own compose namespace', () => {
+  const out = migrateFrom({
+    version: 1,
+    projects: [
+      { ...baseProject({ id: 'a', name: 'api' }), composeProject: undefined },
+      { ...baseProject({ id: 'b', name: 'api' }), composeProject: undefined }
+    ]
+  })
+  const projects = out.projects as Array<{ name: string; composeProject: string }>
+  assert.equal(projects.length, 2, 'a project was dropped')
+  assert.equal(projects[0]?.composeProject, 'harbor-api')
+  // Two directories can both be called `api`; sharing a namespace would put
+  // both stacks' containers and volumes in one place.
+  assert.notEqual(projects[1]?.composeProject, projects[0]?.composeProject)
+})
+
+check('migration never re-derives a compose namespace that already exists', () => {
+  const out = migrateFrom({
+    version: 2,
+    projects: [baseProject({ id: 'a', name: 'renamed-since', composeProject: 'harbor-original' })]
+  })
+  const projects = out.projects as Array<{ composeProject: string }>
+  // Re-deriving would point Harbor at a namespace holding none of the running
+  // containers or volumes — orphaning a stack, data included.
+  assert.equal(projects[0]?.composeProject, 'harbor-original')
+})
+
+check('migration keeps installed versions but discards machine-wide values', () => {
+  const out = migrateFrom({
+    version: 1,
+    services: {
+      mysql: { version: '8.0', values: { database: 'someone_elses_db', binlog: true, port: 3306 } }
+    },
+    projects: []
+  })
+  assert.deepEqual(out.serviceVersions, { mysql: '8.0' })
+  assert.equal(out.services, undefined, 'legacy services survived the migration')
+  assert.equal(out.serviceDefaults, undefined, 'machine-wide values survived the migration')
+  assert.equal(out.version, STATE_VERSION)
+})
+
+check('migration drops the v2 seed store that leaked config between projects', () => {
+  const out = migrateFrom({
+    version: 2,
+    serviceDefaults: { mysql: { version: 'latest', values: { database: 'paymentpro' } } },
+    projects: []
+  })
+  assert.equal(out.serviceDefaults, undefined)
+  assert.deepEqual(out.serviceVersions, { mysql: 'latest' })
+})
+
+check('migration drops the legacy per-project service list', () => {
+  const out = migrateFrom({
+    version: 1,
+    projects: [{ ...baseProject({ id: 'a', name: 'api' }), serviceIds: ['mysql'] }],
+    services: {}
+  })
+  const projects = out.projects as Array<Record<string, unknown>>
+  assert.equal(projects[0]?.serviceIds, undefined)
+})
+
+// ── certificates ─────────────────────────────────────────────────────────
+
+check('a site with a missing certificate is served over plain HTTP', () => {
+  const conf = nginx.render({
+    project: baseProject({ secure: true }),
+    root: '/tmp/api',
+    proxyPort: 3100,
+    cert: { certFile: '/nope/missing.pem', keyFile: '/nope/missing-key.pem' }
+  })
+  assertWellFormed(conf)
+  // nginx validates its whole configuration as one unit, so one certificate
+  // pointing at a file that isn't there stops EVERY site from being served.
+  // Degrading this site to HTTP costs one site its TLS; emitting the path costs
+  // all of them their config.
+  assert.doesNotMatch(conf, /ssl_certificate/)
+  assert.match(conf, /^\s{4}listen 80;$/m)
+})
+
+check('a site with a real certificate still gets TLS', () => {
+  const { dir, certFile, keyFile } = makeCertPair()
+  try {
+    const conf = nginx.render({
+      project: baseProject({ secure: true }),
+      root: '/tmp/api',
+      proxyPort: 3100,
+      cert: { certFile, keyFile }
+    })
+    assertWellFormed(conf)
+    assert.match(conf, new RegExp(`ssl_certificate ${certFile};`))
+    // And the HTTP block still redirects, so http:// does not fall through to
+    // whichever other vhost is the default server for that port.
+    assert.match(conf, /return 301 https:/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── update checks ────────────────────────────────────────────────────────
+
+check('an installed runtime at the newest release reports no update', async () => {
+  const info = await checkManagedUpdate('26.7.0', async () => ['26.7.0', '26.6.0'], 'Node.js')
+  assert.equal(info.available, false)
+  assert.equal(info.latest, '26.7.0')
+})
+
+check('a newer release is offered, and installed alongside rather than over', async () => {
+  const info = await checkManagedUpdate('26.7.0', async () => ['26.8.1', '26.7.0'], 'Node.js')
+  assert.equal(info.available, true)
+  assert.equal(info.latest, '26.8.1')
+  assert.equal(info.major, false)
+  // Replacing it would break every project pinned to the old version.
+  assert.match(info.action, /alongside 26\.7\.0/)
+})
+
+check('a major release is flagged before it is offered as one click', async () => {
+  const info = await checkManagedUpdate('26.7.0', async () => ['27.0.0', '26.7.0'], 'Node.js')
+  assert.equal(info.available, true)
+  assert.equal(info.major, true)
+})
+
+check('a failed check is not reported as being up to date', async () => {
+  const info = await checkManagedUpdate('26.7.0', async () => {
+    throw new Error('getaddrinfo ENOTFOUND')
+  }, 'Node.js')
+  // `latest: null` is the distinction. Saying "up to date" when the lookup
+  // never happened is the one answer worse than saying nothing.
+  assert.equal(info.latest, null)
+  assert.equal(info.available, false)
+  assert.match(info.error ?? '', /ENOTFOUND/)
+})
+
+check('a prerelease or malformed tag is not offered as an update', async () => {
+  const info = await checkManagedUpdate(
+    '26.7.0',
+    async () => ['canary', 'v-broken', '26.7.0'],
+    'Node.js'
+  )
+  assert.equal(info.available, false)
+})
+
+// ── opening links ────────────────────────────────────────────────────────
+
+check('a service console URL is openable', () => {
+  assert.equal(assertOpenable('http://127.0.0.1:15672/').port, '15672')
+  assert.equal(assertOpenable('https://payment-systems.test/').protocol, 'https:')
+})
+
+check('only a browser scheme reaches the operating system', () => {
+  // The renderer displays URLs built from project config and driver metadata,
+  // and openExternal hands whatever it is given to the OS.
+  for (const url of ['file:///etc/passwd', 'smb://host/share', 'javascript:alert(1)']) {
+    assert.throws(() => assertOpenable(url), /Refusing to open/, url)
+  }
+  assert.throws(() => assertOpenable('not a url'), /Not a URL/)
+})
 
 void run()

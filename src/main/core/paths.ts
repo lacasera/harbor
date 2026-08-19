@@ -39,10 +39,45 @@ export function serviceDir(serviceId: string): string {
   return join(paths.services, serviceId)
 }
 
-export function serviceDataDir(serviceId: string): string {
-  return join(paths.data, serviceId)
+/**
+ * Data and logs are per instance, not per service: two projects running MySQL
+ * must not share a directory. Binaries stay under `serviceDir` — installing
+ * MinIO once for the machine is correct.
+ */
+export function serviceDataDir(owner: string, serviceId: string): string {
+  return join(paths.data, owner, serviceId)
 }
 
-export function serviceLogFile(serviceId: string): string {
-  return join(paths.logs, `${serviceId}.log`)
+export function serviceLogFile(owner: string, serviceId: string): string {
+  return join(paths.logs, `${owner}-${serviceId}.log`)
+}
+
+/** Where one owner's compose file and mounted config live. */
+export function composeDir(composeProject: string): string {
+  return join(paths.compose, composeProject)
+}
+
+/** The legacy single compose project, from before stacks were per-project. */
+export const LEGACY_COMPOSE_PROJECT = 'compose'
+
+/**
+ * Compose project name for a Harbor project: `harbor-<name>`.
+ *
+ * The `harbor-` prefix is load-bearing, not decoration. Teardown is scoped by
+ * compose project name, and the user runs their own stacks on this machine —
+ * the prefix is what keeps `docker compose down` from ever reaching one of
+ * them. Docker only accepts `[a-z0-9][a-z0-9_-]*`, so the name is slugged.
+ *
+ * `taken` disambiguates: two directories can both be named `api`, and a
+ * collision would put two projects' containers and volumes in one namespace.
+ */
+export function composeProjectName(name: string, taken: Iterable<string> = []): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'project'
+  const used = new Set(taken)
+  const base = `${APP_NAME}-${slug}`
+  if (!used.has(base)) return base
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`
+    if (!used.has(candidate)) return candidate
+  }
 }

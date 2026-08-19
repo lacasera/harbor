@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProcessHandle } from '../../shared/process.js'
+import { instanceKey, type ServiceInstanceRef } from '../../shared/service.js'
 import type { ProcessManager } from '../core/process-manager.js'
 import type { Backend, BackendStartOptions } from './types.js'
 
@@ -61,7 +62,7 @@ export class NativeBackend implements Backend<NativeStartOptions> {
 
   async start(options: NativeStartOptions): Promise<ProcessHandle> {
     return this.processes.spawn({
-      owner: { kind: 'service', id: options.serviceId },
+      owner: { kind: 'service', id: instanceKey(options.ref) },
       label: options.displayName,
       command: options.command,
       args: options.args ?? [],
@@ -70,8 +71,8 @@ export class NativeBackend implements Backend<NativeStartOptions> {
     })
   }
 
-  async stop(serviceId: string): Promise<void> {
-    const handle = this.processes.findByOwner('service', serviceId)
+  async stop(ref: ServiceInstanceRef): Promise<void> {
+    const handle = this.processes.findByOwner('service', instanceKey(ref))
     if (handle) await this.processes.stop(handle.id)
   }
 }

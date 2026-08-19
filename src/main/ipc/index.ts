@@ -10,6 +10,7 @@ import type {
 import type { HarborApp } from '../app.js'
 import { HARBOR_HOME } from '../core/paths.js'
 import { Updater } from '../updater.js'
+import { openExternal } from '../core/open-external.js'
 import { readProjectEnv } from '../projects/env-file.js'
 
 /** Typed `handle` — the channel name pins both the args and the return type. */
@@ -45,7 +46,9 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   // ── push channels ───────────────────────────────────────────────────────
   harbor.logs.on('line', (line) => send('log:line', line))
   harbor.services.on('changed', (descriptor) => send('service:changed', descriptor))
+  harbor.services.on('detached', (key: string) => send('service:detached', key))
   harbor.projects.on('changed', (descriptor) => send('project:changed', descriptor))
+  harbor.projects.on('forgotten', (id: string) => send('project:forgotten', id))
   harbor.processes.on('changed', (handleUpdate) => send('process:changed', handleUpdate))
   harbor.processes.on('usage', (samples) => send('usage:sample', samples))
   harbor.intelligence.on('invalidated', (projectId: string) =>
@@ -61,15 +64,16 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
     homeDir: HARBOR_HOME
   }))
   handle('app:checkForUpdates', () => updater.check())
+  handle('app:openExternal', (url) => openExternal(url))
 
   // ── services ────────────────────────────────────────────────────────────
-  handle('services:list', () => harbor.services.describeAll())
+  handle('services:list', () => harbor.services.describeCatalogue())
   handle('services:install', (id, version) => harbor.services.install(id, version))
-  handle('services:start', (id) => harbor.services.start(id))
-  handle('services:stop', (id) => harbor.services.stop(id))
-  handle('services:updateConfig', (id, config) => harbor.services.updateConfig(id, config))
-  handle('services:envBlock', (id) => harbor.services.envBlock(id))
-  handle('services:envBlocks', (ids) => harbor.services.envBlocks(ids))
+  handle('services:start', (ref) => harbor.services.start(ref))
+  handle('services:stop', (ref) => harbor.services.stop(ref))
+  handle('services:updateConfig', (ref, patch) => harbor.services.updateConfig(ref, patch))
+  handle('services:envBlock', (ref) => harbor.services.envBlock(ref))
+  handle('services:envBlocks', (refs) => harbor.services.envBlocks(refs))
 
   // ── runtimes ────────────────────────────────────────────────────────────
   handle('runtimes:list', () => harbor.runtimes.describeAll())
@@ -77,6 +81,23 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('runtimes:install', (id, version) => harbor.runtimes.get(id).install(version))
   handle('runtimes:uninstall', (id, version) => harbor.runtimes.get(id).uninstall(version))
   handle('runtimes:resolve', (id, path) => harbor.runtimes.resolve(id, path))
+  handle('runtimes:updates', (force) => harbor.runtimes.checkUpdates({ force }))
+  handle('runtimes:update', async (id, version) => {
+    await harbor.runtimes.update(id, version)
+    return harbor.runtimes.describeAll()
+  })
+  handle('runtimes:configFiles', (id, version) => harbor.runtimes.configFiles(id, version))
+  handle('runtimes:writeConfig', async (id, version, fileId, content) => {
+    harbor.runtimes.writeConfigFile(id, version, fileId, content)
+    // An ini is read once, at startup. Saving without restarting the pool looks
+    // like it worked and changes nothing about the sites being served.
+    if (id === 'php') {
+      await harbor.fpm.restart(version).catch((err: Error) => {
+        harbor.logs.push('harbor', 'php-fpm', `could not restart ${version}: ${err.message}`)
+      })
+    }
+    return harbor.runtimes.configFiles(id, version)
+  })
   handle('runtimes:setDefault', async (id, version) => {
     harbor.store.update((s) => {
       s.runtimeDefaults[id] = version
@@ -88,7 +109,7 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('projects:list', () => harbor.projects.describeAll())
   handle('projects:park', (dir) => harbor.projects.park(dir))
   handle('projects:link', (dir) => harbor.projects.link(dir))
-  handle('projects:forget', (id) => harbor.projects.forget(id))
+  handle('projects:forget', (id, options) => harbor.projects.forget(id, options))
   handle('projects:start', (id) => harbor.projects.start(id))
   handle('projects:stop', (id) => harbor.projects.stop(id))
   handle('projects:update', (id, patch) => harbor.projects.update(id, patch))
@@ -99,6 +120,22 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   )
   handle('projects:addProcess', (id, input) => harbor.projects.addProcess(id, input))
   handle('projects:removeProcess', (id, specId) => harbor.projects.removeProcess(id, specId))
+  handle('projects:attachService', async (id, serviceId) => {
+    await harbor.services.attach({ owner: id, serviceId })
+    return harbor.services.describeCatalogue()
+  })
+  handle('projects:detachService', async (id, serviceId) => {
+    await harbor.services.detach({ owner: id, serviceId })
+    return harbor.services.describeCatalogue()
+  })
+  handle('projects:startStack', async (id) => {
+    await harbor.services.startOwner(id)
+    return harbor.services.describeCatalogue()
+  })
+  handle('projects:stopStack', async (id) => {
+    await harbor.services.stopOwner(id)
+    return harbor.services.describeCatalogue()
+  })
   handle('projects:envFile', async (projectId) =>
     readProjectEnv(harbor.projects.find(projectId).path)
   )

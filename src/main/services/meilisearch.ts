@@ -5,7 +5,14 @@ import { Readable } from 'node:stream'
 import type { ProcessHandle } from '../../shared/process.js'
 import type { LogSource } from '../../shared/logs.js'
 import type { JSONSchema } from '../../shared/json-schema.js'
-import type { ServiceConfig, ServiceDriver, ServiceStatus } from '../../shared/service.js'
+import {
+  instanceKey,
+  type ServiceConsole,
+  type ServiceDriver,
+  type ServiceInstance,
+  type ServiceInstanceRef,
+  type ServiceStatus
+} from '../../shared/service.js'
 import type { NativeBackend } from '../backends/native-backend.js'
 import type { ProcessManager } from '../core/process-manager.js'
 import { serviceDataDir, serviceDir } from '../core/paths.js'
@@ -62,7 +69,9 @@ export class MeilisearchDriver implements ServiceDriver {
     required: ['port', 'masterKey']
   }
 
-  readonly logSources: LogSource[] = [{ kind: 'stdout', label: 'meilisearch' }]
+  logSources(ref: ServiceInstanceRef): LogSource[] {
+    return [{ kind: 'stdout', label: instanceKey(ref) }]
+  }
 
   readonly envHints: Record<string, string> = {
     SCOUT_DRIVER: 'meilisearch',
@@ -71,7 +80,6 @@ export class MeilisearchDriver implements ServiceDriver {
     MEILI_MASTER_KEY: '${masterKey}'
   }
 
-  private running: ServiceConfig | null = null
   private arch = process.arch === 'arm64' ? 'apple-silicon' : 'amd64'
 
   constructor(
@@ -115,47 +123,59 @@ export class MeilisearchDriver implements ServiceDriver {
     chmodSync(target, 0o755)
   }
 
-  configuredPorts(config: ServiceConfig): number[] {
-    return [Number(config.values.port ?? 7700)]
+  /**
+   * Meilisearch bundles a search preview at the root, but only serves it in the
+   * development environment. Offering the link in production would open a page
+   * that isn't there, which is worse than offering nothing.
+   */
+  console(instance: ServiceInstance): ServiceConsole | null {
+    if (String(instance.values.env ?? 'development') !== 'development') return null
+    return {
+      label: 'Open dashboard',
+      url: `http://127.0.0.1:${Number(instance.values.port ?? 7700)}`
+    }
   }
 
-  async start(config: ServiceConfig): Promise<ProcessHandle> {
+  configuredPorts(instance: ServiceInstance): number[] {
+    return [Number(instance.values.port ?? 7700)]
+  }
+
+  async start(instance: ServiceInstance): Promise<ProcessHandle> {
     const versions = await this.installedVersions()
-    const version = versions.includes(config.version) ? config.version : versions[0]
+    const version = versions.includes(instance.version) ? instance.version : versions[0]
     if (!version) throw new Error('Meilisearch is not installed yet')
 
-    const data = (config.values.dataDir as string) || serviceDataDir(this.id)
+    const data =
+      (instance.values.dataDir as string) || serviceDataDir(instance.owner, instance.serviceId)
     mkdirSync(data, { recursive: true })
 
-    this.running = config
     return this.native.start({
-      serviceId: this.id,
+      ref: { owner: instance.owner, serviceId: instance.serviceId },
       displayName: this.displayName,
       command: this.binaryPath(version),
       args: [
         '--http-addr',
-        `127.0.0.1:${config.values.port ?? 7700}`,
+        `127.0.0.1:${instance.values.port ?? 7700}`,
         '--db-path',
         join(data, 'data.ms'),
         '--dump-dir',
         join(data, 'dumps'),
         '--env',
-        String(config.values.env ?? 'development')
+        String(instance.values.env ?? 'development')
       ],
-      env: { MEILI_MASTER_KEY: String(config.values.masterKey ?? '') }
+      env: { MEILI_MASTER_KEY: String(instance.values.masterKey ?? '') }
     })
   }
 
-  async stop(): Promise<void> {
-    await this.native.stop(this.id)
-    this.running = null
+  async stop(instance: ServiceInstance): Promise<void> {
+    await this.native.stop({ owner: instance.owner, serviceId: instance.serviceId })
   }
 
-  async healthCheck(): Promise<ServiceStatus> {
-    const handle = this.processes.findByOwner('service', this.id)
+  async healthCheck(instance: ServiceInstance): Promise<ServiceStatus> {
+    const handle = this.processes.findByOwner('service', instanceKey(instance))
     if (!handle) return { health: 'stopped', ports: [] }
 
-    const port = Number(this.running?.values.port ?? 7700)
+    const port = Number(instance.values.port ?? 7700)
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(1500)

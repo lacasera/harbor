@@ -5,7 +5,8 @@ import { LogAggregator } from './core/log-aggregator.js'
 import { PrivilegedHelper } from './core/privileged-helper.js'
 import { NativeBackend } from './backends/native-backend.js'
 import { DockerBackend } from './backends/docker-backend.js'
-import { ServiceRegistry } from './services/registry.js'
+import { ServiceCatalogue } from './services/registry.js'
+import { ServiceInstances } from './services/instances.js'
 import { registerServices } from './services/index.js'
 import { RuntimeManager, registerRuntimes } from './runtimes/index.js'
 import { PhpRuntime } from './runtimes/php.js'
@@ -14,6 +15,7 @@ import { ProjectManager } from './projects/index.js'
 import { DnsmasqManager } from './projects/dnsmasq.js'
 import { TlsManager } from './projects/tls.js'
 import { CodeIntelligence, createCodeIntelligence } from './intelligence/index.js'
+import { MACHINE_OWNER } from '../shared/service.js'
 import { ensureDirs, HARBOR_HOME } from './core/paths.js'
 
 /**
@@ -29,7 +31,8 @@ export class HarborApp {
   readonly privileged: PrivilegedHelper
   readonly native: NativeBackend
   readonly docker: DockerBackend
-  readonly services: ServiceRegistry
+  readonly catalogue: ServiceCatalogue
+  readonly services: ServiceInstances
   readonly runtimes: RuntimeManager
   readonly projects: ProjectManager
   readonly fpm: PhpFpmManager
@@ -49,8 +52,8 @@ export class HarborApp {
     this.native = new NativeBackend(this.processes)
     this.docker = new DockerBackend(this.processes)
 
-    this.services = new ServiceRegistry(this.store, this.logs, this.processes)
-    registerServices(this.services, {
+    this.catalogue = new ServiceCatalogue()
+    registerServices(this.catalogue, {
       native: this.native,
       docker: this.docker,
       processes: this.processes
@@ -73,8 +76,23 @@ export class HarborApp {
       fpm: this.fpm,
       native: this.native,
       privileged: this.privileged,
-      tls: this.tls
+      tls: this.tls,
+      docker: this.docker
     })
+
+    // Built after ProjectManager: an owner's compose project name is stored on
+    // its Project, so resolving one means asking the project manager.
+    this.services = new ServiceInstances(
+      this.catalogue,
+      this.store,
+      this.logs,
+      this.processes,
+      this.ports,
+      this.docker,
+      (owner) => this.projects.composeProjectFor(owner),
+      (owner) => this.projects.ownerNameFor(owner)
+    )
+    this.projects.attachServices(this.services)
 
     this.dns = new DnsmasqManager(this.native, this.privileged, this.processes)
     this.intelligence = createCodeIntelligence()
@@ -89,6 +107,19 @@ export class HarborApp {
     if (reclaimed) {
       this.logs.push('harbor', 'startup', `reclaimed ${reclaimed} orphaned process(es)`)
       await new Promise((r) => setTimeout(r, 500))
+    }
+
+    // Instances whose project is gone: a crash between forgetting a project and
+    // detaching its stack leaves records nothing can ever reach again.
+    const orphans = await this.services
+      .reconcile(this.store.get().projects.map((p) => p.id))
+      .catch(() => [])
+    if (orphans.length) {
+      this.logs.push(
+        'harbor',
+        'startup',
+        `detached ${orphans.length} service instance(s) whose project no longer exists`
+      )
     }
 
     this.processes.startUsagePolling()
@@ -108,7 +139,10 @@ export class HarborApp {
     await this.projects.rewriteAllVhosts()
 
     if (this.store.get().settings.autoStartServices) {
-      await this.services.autoStart()
+      for (const project of this.store.get().projects) {
+        await this.services.startOwner(project.id)
+      }
+      await this.services.startOwner(MACHINE_OWNER)
     }
   }
 

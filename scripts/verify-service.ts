@@ -9,7 +9,7 @@
  * Runs against the real ~/.harbor and downloads the MinIO binary on first use.
  */
 import { HarborApp } from '../src/main/app.js'
-import type { ServiceConfig } from '../src/shared/service.js'
+import { MACHINE_OWNER, type ServiceInstance } from '../src/shared/service.js'
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -21,15 +21,23 @@ const step = (name: string, ok: boolean, detail = ''): void => {
 
 async function main(): Promise<void> {
   const harbor = new HarborApp()
-  const driver = harbor.services.get('minio')
-  let previous: ServiceConfig | null = null
+  const driver = harbor.catalogue.get('minio')
+  const ref = { owner: MACHINE_OWNER, serviceId: 'minio' }
+  let previous: ServiceInstance | null = null
+  let created = false
 
   try {
-    previous = harbor.services.configFor('minio')
+    // MinIO is still machine-wide, so its instance is owned by `machine`. The
+    // script attaches it if the app has never had one.
+    if (!harbor.services.get(ref)) {
+      await harbor.services.attach(ref, { autoStart: false })
+      created = true
+    }
+    previous = harbor.services.get(ref) as ServiceInstance
 
     // Non-default ports and credentials on purpose: this is what proves the
     // .env block reflects the running instance instead of the schema.
-    await harbor.services.updateConfig('minio', {
+    await harbor.services.updateConfig(ref, {
       values: {
         ...previous.values,
         port: 9077,
@@ -47,19 +55,19 @@ async function main(): Promise<void> {
     }
     step('MinIO installed', installed.length > 0, installed.join(', '))
 
-    const started = await harbor.services.start('minio')
+    const started = await harbor.services.start(ref)
     step('start returned a descriptor', Boolean(started))
 
     // Health polls a real HTTP endpoint, so give the server a moment to bind.
     let health = started.status
     for (let i = 0; i < 20 && health.health !== 'running'; i++) {
       await wait(500)
-      health = await driver.healthCheck()
+      health = await driver.healthCheck(harbor.services.get(ref) as ServiceInstance)
     }
     step('health check reports running', health.health === 'running', health.detail ?? health.error ?? '')
     step('bound the configured ports', health.ports.includes(9077), health.ports.join(', '))
 
-    const block = await harbor.services.envBlock('minio')
+    const block = await harbor.services.envBlock(ref)
     const vars = Object.fromEntries(block.vars.map((v) => [v.key, v.value]))
     step(
       'env block carries live credentials, not schema defaults',
@@ -72,22 +80,22 @@ async function main(): Promise<void> {
       vars.AWS_ENDPOINT ?? '(missing)'
     )
 
-    const logs = harbor.logs.query({ sources: ['minio'], limit: 50 })
+    const logs = harbor.logs.query({ sources: ['machine:minio'], limit: 50 })
     step('MinIO output reached the log aggregator', logs.length > 0, `${logs.length} lines`)
 
     const usage = await harbor.processes.sampleUsage()
-    const handle = harbor.processes.findByOwner('service', 'minio')
+    const handle = harbor.processes.findByOwner('service', 'machine:minio')
     step(
       'resource sample resolves via the owner handle',
       Boolean(handle && usage.some((u) => u.processId === handle.id)),
       handle ? `pid ${handle.pid}` : 'no handle'
     )
 
-    const stopped = await harbor.services.stop('minio')
+    const stopped = await harbor.services.stop(ref)
     step('stop reports it stopped', stopped.status.health === 'stopped', stopped.status.health)
 
     // ── validation ────────────────────────────────────────────────────────
-    const invalid = await harbor.services.updateConfig('minio', {
+    const invalid = await harbor.services.updateConfig(ref, {
       values: { ...previous.values, port: 80 }
     })
     step(
@@ -97,18 +105,18 @@ async function main(): Promise<void> {
     )
     step(
       'a rejected update leaves the stored config untouched',
-      harbor.services.configFor('minio').values.port !== 80,
-      `port=${harbor.services.configFor('minio').values.port}`
+      harbor.services.get(ref)?.values.port !== 80,
+      `port=${String(harbor.services.get(ref)?.values.port)}`
     )
 
     // ── crash reporting ───────────────────────────────────────────────────
-    await harbor.services.start('minio')
+    await harbor.services.start(ref)
     await wait(1500)
-    const live = harbor.processes.findByOwner('service', 'minio')
+    const live = harbor.processes.findByOwner('service', 'machine:minio')
     if (live?.pid) {
       process.kill(live.pid, 'SIGKILL')
       await wait(1200)
-      const after = await harbor.services.describe('minio', { fresh: true })
+      const after = await harbor.services.describeInstance(ref, { fresh: true })
       step(
         'a killed service reports an error, not merely stopped',
         after.status.health === 'error',
@@ -118,8 +126,11 @@ async function main(): Promise<void> {
       step('a killed service reports an error, not merely stopped', false, 'no live process')
     }
   } finally {
-    if (previous) {
-      await harbor.services.updateConfig('minio', { values: previous.values }).catch(() => undefined)
+    // Restore what this script changed: it runs against the real ~/.harbor.
+    if (created) {
+      await harbor.services.detach(ref).catch(() => undefined)
+    } else if (previous) {
+      await harbor.services.updateConfig(ref, { values: previous.values }).catch(() => undefined)
     }
     await harbor.shutdown().catch(() => undefined)
   }

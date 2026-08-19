@@ -429,17 +429,36 @@
   cursor: pointer;
   background: var(--ln);
   transition: background 0.15s;
-  display: block;
+  /*
+   * A flex line, not a block. The knob is a <span>, and an inline element
+   * ignores width, height and transform — so the knob had no box at all and
+   * every switch in the app rendered as a bare coloured pill with nothing in
+   * it. Green meant on and grey meant off, which is only legible if you
+   * already know that.
+   */
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
 }
 .toggle.on {
   background: var(--gn);
 }
+.toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.toggle:focus-visible {
+  outline: 2px solid var(--ac);
+  outline-offset: 2px;
+}
 .toggle .knob {
+  display: block;
   width: 18px;
   height: 18px;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 2px oklch(0 0 0 / 0.35);
+  /* Travel is the track minus its padding minus the knob: 38 - 4 - 18. */
   transform: translateX(0);
   transition: transform 0.15s;
 }
@@ -1475,4 +1494,155 @@
   padding: 14px 16px;
   border-bottom: 1px solid var(--ln2);
   background: var(--pn2);
+}
+
+/*
+ * Anchors styled as buttons. A service's console has to be a real link so the
+ * window-open handler hands it to the system browser; without these it would
+ * sit at a different height and carry an underline next to real buttons.
+ */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* ── service instances ─────────────────────────────────────────────────── */
+
+/* Master–detail: the whole stack stays visible while one instance is being
+   configured. A rail that scrolls with the page rather than independently —
+   a stack is a handful of services, not a list that needs its own scrollbar. */
+.stack-layout {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .stack-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.stack-rail {
+  border: 1px solid var(--ln);
+  border-radius: 10px;
+  background: var(--pn);
+  overflow: hidden;
+  position: sticky;
+  top: 0;
+}
+.stack-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ln2);
+  background: var(--pn2);
+}
+.stack-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--ln2);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--tx);
+  text-align: left;
+  cursor: pointer;
+}
+.stack-rail-item:hover {
+  background: var(--pn2);
+}
+.stack-rail-item.on {
+  background: var(--pn2);
+  border-left-color: var(--ac);
+}
+.stack-rail-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stack-rail-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ln2);
+}
+.stack-rail-actions .btn {
+  flex: 1;
+}
+.stack-rail-add {
+  padding: 12px;
+}
+
+/* The detail side. Its header is the instance's identity and controls, pinned
+   above the form so Start/Stop stays reachable in a long schema. */
+.instance-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.instance-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--ln);
+  border-radius: 10px;
+  background: var(--pn);
+}
+.instance-panel-head.pinned {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+/*
+ * Paint the page background in the strip above a pinned header.
+ *
+ * The scroll area has padding at the top, so a header pinned to `top: 0` sits
+ * below it — and form rows scrolled up through that strip stayed visible above
+ * the header, reading as content floating over a bar it should have gone
+ * behind. The band is over-tall on purpose: it is clipped by the scroll
+ * container, so it covers whatever the padding happens to be rather than
+ * depending on a value repeated in two places.
+ *
+ * Only on `.pinned`, and only ever pinned when this panel is the top of its
+ * column — the band is opaque, so on a page with a card above it, it painted
+ * over the bottom of that card.
+ */
+.instance-panel-head.pinned::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: calc(100% + 1px);
+  height: 48px;
+  background: var(--bg);
+}
+.instance-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* A button that reads as a link — used to jump from an instance to its owner. */
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--ac);
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
 }

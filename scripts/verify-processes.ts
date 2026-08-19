@@ -63,12 +63,16 @@ void (async () => {
     step('the choice is persisted', stopped?.enabled === false)
 
     // ── custom commands ───────────────────────────────────────────────────
+    // Only custom processes this run created. `find(p => p.custom)` picked the
+    // FIRST custom entry, which on a project where the user had already added
+    // one was theirs — so the script started their command and then deleted it.
+    const existingCustom = new Set(before.filter((p) => p.custom).map((p) => p.id))
     const added = await harbor.projects.addProcess(project.id, {
       label: 'Harbor probe',
       command: 'php artisan --version',
       runtime: 'php'
     })
-    const custom = added.processes.find((p) => p.custom)
+    const custom = added.processes.find((p) => p.custom && !existingCustom.has(p.id))
     step('a custom command can be added', Boolean(custom), custom?.command ?? '')
     step(
       'its id cannot shadow a detected one',
@@ -92,7 +96,8 @@ void (async () => {
       const after = await harbor.projects.removeProcess(project.id, custom.id)
       step(
         'removing it leaves the detected ones alone',
-        !after.processes.some((p) => p.custom) && after.processes.length === before.length,
+        !after.processes.some((p) => p.custom && !existingCustom.has(p.id)) &&
+          after.processes.length === before.length,
         `${after.processes.length} remain`
       )
     }

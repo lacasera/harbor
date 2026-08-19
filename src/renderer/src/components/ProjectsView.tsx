@@ -3,6 +3,7 @@ import type { ProjectDescriptor } from '../../../shared/project.js'
 import { invoke } from '../ipc/client.js'
 import { CopyIconButton, StatusDot, useCopy } from './primitives.js'
 import { TypeIcon, typeLabel } from './TypeIcon.js'
+import { ExternalLink } from './ExternalLink.js'
 
 export function ProjectsView({
   projects,
@@ -133,16 +134,9 @@ export function ProjectsView({
                     copy={copy}
                     title="Copy domain"
                   />
-                  <a
-                    className="icon-btn"
-                    href={project.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="Open in browser"
-                    onClick={(e) => e.stopPropagation()}
-                  >
+                  <ExternalLink className="icon-btn" href={project.url} title="Open in browser">
                     ↗
-                  </a>
+                  </ExternalLink>
                 </div>
 
                 <div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ServiceDescriptor } from '../../shared/service.js'
+import type { ServiceDescriptor, ServiceInstanceDescriptor } from '../../shared/service.js'
 import type { ProjectDescriptor } from '../../shared/project.js'
 import type { RuntimeDescriptor } from '../../shared/runtime.js'
 import type { ProcessHandle, ResourceUsage } from '../../shared/process.js'
@@ -15,6 +15,7 @@ import { LogsView } from './components/LogsView.js'
 import { RuntimesView } from './components/RuntimesView.js'
 import { SettingsView } from './components/SettingsView.js'
 import { formatBytes } from './components/primitives.js'
+import { sourceLabels } from './components/log-labels.js'
 
 const LOG_BUFFER = 400
 const THEME_KEY = 'harbor.theme'
@@ -47,6 +48,26 @@ export function App(): React.JSX.Element {
     void invoke('runtimes:list').then(setRuntimes)
   }, [])
 
+  /**
+   * Fold one instance into the catalogue it belongs to. Everything that changes
+   * a service now changes an instance, and the catalogue entry is just where
+   * the renderer keeps them.
+   */
+  const mergeInstance = useCallback((next: ServiceInstanceDescriptor) => {
+    setServices((prev) =>
+      prev.map((s) =>
+        s.id === next.serviceId
+          ? {
+              ...s,
+              instances: s.instances.some((i) => i.key === next.key)
+                ? s.instances.map((i) => (i.key === next.key ? next : i))
+                : [...s.instances, next]
+            }
+          : s
+      )
+    )
+  }, [])
+
   useEffect(() => {
     reloadServices()
     reloadProjects()
@@ -67,8 +88,19 @@ export function App(): React.JSX.Element {
   // Main pushes on every state change, so nothing here polls.
   useEffect(
     () =>
-      subscribe('service:changed', (next) =>
-        setServices((prev) => prev.map((s) => (s.id === next.id ? next : s)))
+      // A push carries one instance, so it is merged into the catalogue entry
+      // that owns it rather than replacing a top-level service.
+      subscribe('service:changed', mergeInstance),
+    []
+  )
+  useEffect(
+    () =>
+      // A detached instance has to leave the catalogue, or the project's
+      // Services tab keeps listing a service that no longer exists.
+      subscribe('service:detached', (key) =>
+        setServices((prev) =>
+          prev.map((s) => ({ ...s, instances: s.instances.filter((i) => i.key !== key) }))
+        )
       ),
     []
   )
@@ -77,6 +109,19 @@ export function App(): React.JSX.Element {
       subscribe('project:changed', (next) =>
         setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)))
       ),
+    []
+  )
+  useEffect(
+    () =>
+      // Every removal path lands here, rather than each one remembering to
+      // reload: forgetting from the detail page navigated back to a list that
+      // still had the project in it.
+      subscribe('project:forgotten', (id) => {
+        setProjects((prev) => prev.filter((p) => p.id !== id))
+        // Viewing the project that just went away would render "missing"; the
+        // list is the only sensible place to be.
+        setRoute((r) => (r.name === 'project' && r.id === id ? { name: 'projects' } : r))
+      }),
     []
   )
   useEffect(
@@ -105,15 +150,25 @@ export function App(): React.JSX.Element {
   )
 
   const runningProjects = projects.filter((p) => p.served)
-  const runningServices = services.filter((s) => s.status.health === 'running')
+  // Flattened across owners: what is running is an instance, and two projects'
+  // MySQLs are two entries on different ports, not one.
+  const runningServices = useMemo(
+    () =>
+      services.flatMap((s) =>
+        s.instances
+          .filter((i) => i.status.health === 'running')
+          .map((i) => ({ service: s, instance: i }))
+      ),
+    [services]
+  )
 
   const running: RunningEntry[] = useMemo(
     () => [
-      ...runningServices.map((s) => ({
-        id: s.id,
-        name: s.displayName,
-        port: String(s.status.ports[0] ?? s.defaultPorts[0] ?? ''),
-        go: () => setRoute({ name: 'service', id: s.id })
+      ...runningServices.map(({ service, instance }) => ({
+        id: instance.key,
+        name: instance.displayName,
+        port: String(instance.status.ports[0] ?? service.defaultPorts[0] ?? ''),
+        go: () => setRoute({ name: 'service', id: service.id })
       })),
       ...runningProjects.map((p) => ({
         id: p.id,
@@ -124,6 +179,9 @@ export function App(): React.JSX.Element {
     ],
     [runningServices, runningProjects]
   )
+
+  // Derived, not stored: a source id is stable and a project's name is not.
+  const logLabels = useMemo(() => sourceLabels(projects, services), [projects, services])
 
   const totals = useMemo(() => {
     if (!usage.length) return { cpu: '—', ram: '—' }
@@ -180,6 +238,8 @@ export function App(): React.JSX.Element {
                 onChanged={(next) =>
                   setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)))
                 }
+                onInstanceChanged={mergeInstance}
+                onCatalogueChanged={setServices}
                 onOpenServices={() => setRoute({ name: 'services' })}
                 onOpenLogs={() => setRoute({ name: 'logs' })}
               />
@@ -190,12 +250,8 @@ export function App(): React.JSX.Element {
           {route.name === 'services' && (
             <ServicesView
               services={services}
-              processes={processes}
-              usage={usage}
               onOpen={(id) => setRoute({ name: 'service', id })}
-              onChanged={(next) =>
-                setServices((prev) => prev.map((s) => (s.id === next.id ? next : s)))
-              }
+              onChanged={mergeInstance}
             />
           )}
 
@@ -204,13 +260,13 @@ export function App(): React.JSX.Element {
               <ServiceDetail
                 service={service}
                 catalogue={services}
+                projects={projects}
                 processes={processes}
                 usage={usage}
                 logs={logs}
                 onBack={() => setRoute({ name: 'services' })}
-                onChanged={(next) =>
-                  setServices((prev) => prev.map((s) => (s.id === next.id ? next : s)))
-                }
+                onChanged={mergeInstance}
+                onCatalogueChanged={setServices}
                 onOpenLogs={() => setRoute({ name: 'logs' })}
               />
             ) : (
@@ -225,6 +281,7 @@ export function App(): React.JSX.Element {
             <LogsView
               lines={logs}
               sources={sources}
+              labels={logLabels}
               follow={follow}
               onToggleFollow={() => setFollow((f) => !f)}
               onClear={() => void invoke('logs:clear').then(() => setLogs([]))}

@@ -1,12 +1,11 @@
-import type { ServiceRegistry } from './registry.js'
+import type { ServiceCatalogue } from './registry.js'
 import type { NativeBackend } from '../backends/native-backend.js'
 import type { DockerBackend } from '../backends/docker-backend.js'
 import type { ProcessManager } from '../core/process-manager.js'
 import { MinioDriver } from './minio.js'
 import { MeilisearchDriver } from './meilisearch.js'
-import { RabbitMqDriver } from './rabbitmq.js'
 import { DockerServiceDriver } from './docker-service.js'
-import { ELASTICSEARCH, KAFKA, LOCALSTACK, OPENSEARCH } from './docker-catalog.js'
+import { ELASTICSEARCH, KAFKA, LOCALSTACK, OPENSEARCH, RABBITMQ } from './docker-catalog.js'
 import { MAILPIT, MARIADB, MONGODB, MYSQL, POSTGRES, REDIS } from './data-catalog.js'
 
 /**
@@ -14,7 +13,7 @@ import { MAILPIT, MARIADB, MONGODB, MYSQL, POSTGRES, REDIS } from './data-catalo
  * spec) plus a line here — no UI, IPC, config-form or log wiring changes.
  */
 export function registerServices(
-  registry: ServiceRegistry,
+  registry: ServiceCatalogue,
   deps: { native: NativeBackend; docker: DockerBackend; processes: ProcessManager }
 ): void {
   // Native: single binaries developers leave running all day.
@@ -22,7 +21,6 @@ export function registerServices(
   registry.register(new MeilisearchDriver(deps.native, deps.processes))
 
   // Docker: heavier, JVM-shaped, or awkward to install natively.
-  registry.register(new RabbitMqDriver(deps.docker))
   for (const spec of [
     // Data stores first — they are what most projects reach for.
     MYSQL,
@@ -33,6 +31,7 @@ export function registerServices(
     MAILPIT,
     ELASTICSEARCH,
     OPENSEARCH,
+    RABBITMQ,
     LOCALSTACK,
     KAFKA
   ]) {

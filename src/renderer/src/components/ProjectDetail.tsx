@@ -5,7 +5,11 @@ import type {
   ProjectProcessDescriptor
 } from '../../../shared/project.js'
 import type { AnalysisResult } from '../../../shared/intelligence.js'
-import type { EnvBlock as EnvBlockData, ServiceDescriptor } from '../../../shared/service.js'
+import type {
+  EnvBlock as EnvBlockData,
+  ServiceDescriptor,
+  ServiceInstanceDescriptor
+} from '../../../shared/service.js'
 import type { RuntimeDescriptor } from '../../../shared/runtime.js'
 import type { LogLine } from '../../../shared/logs.js'
 import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
@@ -27,6 +31,9 @@ import {
 import { EnvLines, toRows, toText } from './EnvBlock.js'
 import { Insights } from './Insights.js'
 import { LogRows } from './LogsView.js'
+import { ExternalLink } from './ExternalLink.js'
+import { ServiceIcon } from './ServiceIcon.js'
+import { ServiceInstancePanel } from './ServiceInstancePanel.js'
 
 /** Kept beside the UI that offers them; the main process is the authority. */
 const PROJECT_TYPES = [
@@ -44,6 +51,8 @@ export function ProjectDetail({
   logs,
   onBack,
   onChanged,
+  onInstanceChanged,
+  onCatalogueChanged,
   onOpenServices,
   onOpenLogs
 }: {
@@ -55,9 +64,18 @@ export function ProjectDetail({
   logs: LogLine[]
   onBack: () => void
   onChanged: (next: ProjectDescriptor) => void
+  onInstanceChanged: (next: ServiceInstanceDescriptor) => void
+  onCatalogueChanged: (next: ServiceDescriptor[]) => void
   onOpenServices: () => void
   onOpenLogs: () => void
 }): React.JSX.Element {
+  // Derived from the catalogue, which is the only place instances live. The
+  // project used to carry its own copy and it went stale the moment anything
+  // changed one — a start, a stop, or the background health poll.
+  const instances = useMemo(
+    () => services.flatMap((s) => s.instances).filter((i) => i.owner === project.id),
+    [services, project.id]
+  )
   const [tab, setTab] = useState<ProjectTab>('overview')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -106,9 +124,9 @@ export function ProjectDetail({
               <span className="pill mono">{project.serveModel}</span>
             </div>
             <div className="hstack" style={{ gap: 6, marginTop: 6, paddingLeft: 17 }}>
-              <a className="mono" style={{ fontSize: 12.5 }} href={project.url} target="_blank" rel="noreferrer">
+              <ExternalLink className="mono" style={{ fontSize: 12.5 }} href={project.url}>
                 {project.url}
-              </a>
+              </ExternalLink>
               <CopyIconButton
                 text={project.url}
                 copyKey="pd"
@@ -175,7 +193,8 @@ export function ProjectDetail({
             { id: 'env', label: 'Env' },
             { id: 'insights', label: 'Insights' },
             { id: 'logs', label: 'Logs' },
-            { id: 'processes', label: 'Processes' }
+            { id: 'processes', label: 'Processes' },
+            { id: 'services', label: 'Services' }
           ]}
         />
       </div>
@@ -186,8 +205,8 @@ export function ProjectDetail({
         {tab === 'overview' && (
           <Overview
             project={project}
+            instances={instances}
             runtimes={runtimes}
-            services={services}
             proc={proc}
             sample={sample}
             busy={busy}
@@ -199,17 +218,27 @@ export function ProjectDetail({
         )}
 
         {tab === 'env' && (
-          <EnvTab
-            project={project}
-            services={services}
-            onManage={() => setTab('overview')}
-          />
+          <EnvTab project={project} instances={instances} onManage={() => setTab('services')} />
         )}
 
         {tab === 'insights' && <InsightsTab project={project} />}
 
         {tab === 'processes' && (
           <ProcessesTab project={project} busy={busy} onChanged={onChanged} />
+        )}
+
+        {tab === 'services' && (
+          <ServicesTab
+            project={project}
+            instances={instances}
+            catalogue={services}
+            processes={processes}
+            usage={usage}
+            logs={logs}
+            onCatalogueChanged={onCatalogueChanged}
+            onInstanceChanged={onInstanceChanged}
+            onOpenLogs={onOpenLogs}
+          />
         )}
 
         {tab === 'logs' && (
@@ -242,8 +271,8 @@ export function ProjectDetail({
 
 function Overview({
   project,
+  instances,
   runtimes,
-  services,
   proc,
   sample,
   busy,
@@ -253,8 +282,8 @@ function Overview({
   onOpenServices
 }: {
   project: ProjectDescriptor
+  instances: ServiceInstanceDescriptor[]
   runtimes: RuntimeDescriptor[]
-  services: ServiceDescriptor[]
   proc: ProcessHandle | undefined
   sample: ResourceUsage | undefined
   busy: boolean
@@ -265,7 +294,6 @@ function Overview({
     redetectType?: boolean
     runtimeOverride?: { runtime: string; version: string } | null
     secure?: boolean
-    serviceIds?: string[]
   }) => void
   onOpenServices: () => void
 }): React.JSX.Element {
@@ -444,30 +472,22 @@ function Overview({
         <div className="card card-pad">
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Services</div>
           <div className="hint" style={{ marginBottom: 10 }}>
-            Chosen here, exported on the Env tab
+            This project&rsquo;s own instances — its ports, its credentials, its data
           </div>
           <div className="hstack" style={{ gap: 6 }}>
-            {services.map((service) => {
-              const on = project.serviceIds.includes(service.id)
-              return (
-                <button
-                  key={service.id}
-                  type="button"
-                  className={`chip ${on ? 'on' : ''}`}
-                  disabled={busy}
-                  onClick={() =>
-                    onPatch({
-                      serviceIds: on
-                        ? project.serviceIds.filter((id) => id !== service.id)
-                        : [...project.serviceIds, service.id]
-                    })
-                  }
-                >
-                  <StatusDot status={statusOf(service.status.health)} small />
-                  {service.displayName}
-                </button>
-              )
-            })}
+            {instances.length ? (
+              instances.map((instance) => (
+                <span key={instance.key} className="chip on">
+                  <StatusDot status={statusOf(instance.status.health)} small />
+                  {instance.displayName}
+                  <span className="mono small muted">
+                    :{String(instance.status.ports[0] ?? instance.values.port ?? '—')}
+                  </span>
+                </span>
+              ))
+            ) : (
+              <span className="small muted">None attached</span>
+            )}
           </div>
           <button
             type="button"
@@ -475,7 +495,7 @@ function Overview({
             style={{ marginTop: 12, color: 'var(--ac)' }}
             onClick={onOpenServices}
           >
-            Manage services →
+            Browse the catalogue →
           </button>
         </div>
       </div>
@@ -744,11 +764,11 @@ function ProcessesTab({
 
 function EnvTab({
   project,
-  services,
+  instances,
   onManage
 }: {
   project: ProjectDescriptor
-  services: ServiceDescriptor[]
+  instances: ServiceInstanceDescriptor[]
   onManage: () => void
 }): React.JSX.Element {
   const [blocks, setBlocks] = useState<EnvBlockData[]>([])
@@ -766,22 +786,22 @@ function EnvTab({
     }
   }, [project.id])
 
-  // Only this project's services — an aggregate of everything running was a
-  // stand-in until projects could declare what they use.
-  const selected = useMemo(
-    () => project.serviceIds.filter((id) => services.some((s) => s.id === id)),
-    [project.serviceIds, services]
+  // Only this project's own instances. Each exports the port and credentials
+  // it actually has, so two projects using "MySQL" get two different blocks.
+  const refs = useMemo(
+    () => instances.map((i) => ({ owner: i.owner, serviceId: i.serviceId })),
+    [instances]
   )
 
   useEffect(() => {
     let cancelled = false
-    void invoke('services:envBlocks', selected).then((result) => {
+    void invoke('services:envBlocks', refs).then((result) => {
       if (!cancelled) setBlocks(result)
     })
     return () => {
       cancelled = true
     }
-  }, [selected])
+  }, [refs])
 
   const rows = toRows(blocks, true)
   const varCount = rows.filter((r) => r.eq).length
@@ -902,11 +922,11 @@ function EnvTab({
         </p>
       )}
 
-      {!selected.length && (
+      {!refs.length && (
         <p className="small muted" style={{ marginTop: 12 }}>
-          No services selected for this project yet —{' '}
+          No services attached to this project yet —{' '}
           <button type="button" className="back" style={{ color: 'var(--ac)' }} onClick={onManage}>
-            choose them on the Overview tab
+            add one on the Services tab
           </button>
           .
         </p>
@@ -970,4 +990,222 @@ function InsightsTab({ project }: { project: ProjectDescriptor }): React.JSX.Ele
   )
 
   return <Insights results={results} analyzing={analyzing} onAnalyze={() => analyze(true)} />
+}
+
+/**
+ * A project's own service stack.
+ *
+ * Master–detail rather than a list of expanding accordions. An instance's
+ * configuration is a full page of form, and unfolding one inside the list
+ * pushed every other service off the screen while the panel's own header
+ * collided with the project header above it. A rail of services on the left and
+ * one panel on the right keeps the whole stack visible while you configure any
+ * part of it — and it matches how Projects and Services already work.
+ */
+function ServicesTab({
+  project,
+  instances,
+  catalogue,
+  processes,
+  usage,
+  logs,
+  onCatalogueChanged,
+  onInstanceChanged,
+  onOpenLogs
+}: {
+  project: ProjectDescriptor
+  instances: ServiceInstanceDescriptor[]
+  catalogue: ServiceDescriptor[]
+  processes: ProcessHandle[]
+  usage: ResourceUsage[]
+  logs: LogLine[]
+  onCatalogueChanged: (next: ServiceDescriptor[]) => void
+  onInstanceChanged: (next: ServiceInstanceDescriptor) => void
+  onOpenLogs: () => void
+}): React.JSX.Element {
+  const [selected, setSelected] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const names = useMemo(() => catalogue.map((s) => s.displayName), [catalogue])
+
+  const attached = instances
+  const available = catalogue.filter((s) => !attached.some((i) => i.serviceId === s.id))
+  const active = attached.find((i) => i.key === selected) ?? attached[0] ?? null
+  const running = attached.filter((i) => i.status.health === 'running').length
+
+  const run = async (fn: () => Promise<ServiceDescriptor[]>): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      onCatalogueChanged(await fn())
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!attached.length) {
+    return (
+      <div className="card">
+        <div className="empty" style={{ padding: 36 }}>
+          <h3>No services yet</h3>
+          <p>
+            Add one and {project.name} gets its own instance of it — its own port, its own
+            credentials, its own data. Nothing is shared with another project.
+          </p>
+          <div className="hstack" style={{ gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+            {available.map((service) => (
+              <AddServiceChip
+                key={service.id}
+                service={service}
+                names={names}
+                busy={busy}
+                onAdd={() => void run(() => invoke('projects:attachService', project.id, service.id))}
+              />
+            ))}
+          </div>
+          {error && <p className="error-text">{error}</p>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="stack-layout">
+      <aside className="stack-rail">
+        <div className="stack-rail-head">
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>Stack</span>
+          <span className="small muted">
+            {running}/{attached.length} up
+          </span>
+        </div>
+
+        {attached.map((instance) => {
+          const port = instance.status.ports[0] ?? instance.values.port
+          return (
+            <button
+              key={instance.key}
+              type="button"
+              className={`stack-rail-item ${active?.key === instance.key ? 'on' : ''}`}
+              onClick={() => setSelected(instance.key)}
+            >
+              <ServiceIcon
+                id={instance.serviceId}
+                displayName={instance.displayName}
+                icon={instance.icon}
+                tint={instance.tint}
+                catalogue={names}
+                size={20}
+              />
+              <span className="stack-rail-name">{instance.displayName}</span>
+              <StatusDot status={statusOf(instance.status.health)} small />
+              <span className="mono small muted">{port ? `:${String(port)}` : ''}</span>
+            </button>
+          )
+        })}
+
+        <div className="stack-rail-actions">
+          <button
+            type="button"
+            className="btn xs"
+            disabled={busy}
+            onClick={() => void run(() => invoke('projects:startStack', project.id))}
+          >
+            Start all
+          </button>
+          <button
+            type="button"
+            className="btn xs"
+            disabled={busy}
+            onClick={() => void run(() => invoke('projects:stopStack', project.id))}
+          >
+            Stop all
+          </button>
+        </div>
+
+        <div className="stack-rail-add">
+          <button
+            type="button"
+            className="link-btn"
+            disabled={!available.length}
+            onClick={() => setAdding((v) => !v)}
+          >
+            {adding ? '− Close' : '+ Add a service'}
+          </button>
+          {adding && (
+            <div className="hstack" style={{ gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+              {available.map((service) => (
+                <AddServiceChip
+                  key={service.id}
+                  service={service}
+                  names={names}
+                  busy={busy}
+                  onAdd={() => {
+                    setAdding(false)
+                    void run(() => invoke('projects:attachService', project.id, service.id))
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          <div className="hint" style={{ marginTop: 10 }}>
+            Each runs in <span className="mono">{project.composeProject}</span>. Databases cost
+            roughly half a gigabyte of RAM each, so add what the project uses.
+          </div>
+        </div>
+      </aside>
+
+      <div style={{ minWidth: 0 }}>
+        {error && <p className="error-text">{error}</p>}
+        {active && (
+          <ServiceInstancePanel
+            key={active.key}
+            instance={active}
+            ownerLabel={project.name}
+            catalogueNames={names}
+            processes={processes}
+            usage={usage}
+            logs={logs}
+            pinHeader
+            onChanged={onInstanceChanged}
+            onOpenLogs={onOpenLogs}
+            onDetach={() =>
+              void run(async () => {
+                setSelected(null)
+                return invoke('projects:detachService', project.id, active.serviceId)
+              })
+            }
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AddServiceChip({
+  service,
+  names,
+  busy,
+  onAdd
+}: {
+  service: ServiceDescriptor
+  names: string[]
+  busy: boolean
+  onAdd: () => void
+}): React.JSX.Element {
+  return (
+    <button type="button" className="chip" disabled={busy} onClick={onAdd}>
+      <ServiceIcon
+        id={service.id}
+        displayName={service.displayName}
+        icon={service.icon}
+        tint={service.tint}
+        catalogue={names}
+        size={16}
+      />
+      {service.displayName}
+    </button>
+  )
 }

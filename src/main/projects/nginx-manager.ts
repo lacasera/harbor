@@ -29,6 +29,36 @@ export interface VhostContext {
   httpsPort?: number
 }
 
+export interface DefaultVhostOptions {
+  httpPort: number
+  httpsPort: number
+  tld: string
+  cert?: { certFile: string; keyFile: string }
+}
+
+/**
+ * A certificate is only usable if both files are actually on disk.
+ *
+ * nginx validates its whole configuration as one unit, so a single
+ * `ssl_certificate` pointing at a file that isn't there makes the entire config
+ * invalid — every site stops being served, not just the one with the bad path.
+ * That is a blast radius no single site's TLS is worth, so a missing
+ * certificate degrades that site to plain HTTP instead.
+ */
+function usableCert(
+  cert?: { certFile: string; keyFile: string }
+): { certFile: string; keyFile: string } | undefined {
+  if (!cert) return undefined
+  return existsSync(cert.certFile) && existsSync(cert.keyFile) ? cert : undefined
+}
+
+/** `ok` means nginx would start; `syntaxOk` means the config itself parses. */
+export interface NginxTestResult {
+  ok: boolean
+  syntaxOk: boolean
+  output: string
+}
+
 /**
  * Nginx is the single front door for every `.test` domain regardless of serve
  * model — only what sits behind it changes. All three models render from this
@@ -60,13 +90,21 @@ export class NginxManager {
     return join(paths.vhosts, '000-harbor-default.conf')
   }
 
-  writeDefaultVhost(options: {
-    httpPort: number
-    httpsPort: number
-    tld: string
-    cert?: { certFile: string; keyFile: string }
-  }): void {
+  writeDefaultVhost(options: DefaultVhostOptions): void {
     this.ensureRootConfig()
+    writeFileSync(this.defaultVhostPath(), this.renderDefaultVhost(options), 'utf8')
+  }
+
+  /**
+   * The catch-all's content, without writing it.
+   *
+   * Separate from `writeDefaultVhost` so it can be tested. The test used to
+   * call the writing version, which writes into the real `~/.harbor` — so
+   * running the test suite overwrote the user's live catch-all with a fixture
+   * certificate path, and nginx then refused its entire configuration.
+   */
+  renderDefaultVhost(options: DefaultVhostOptions): string {
+    const cert = usableCert(options.cert)
 
     const body = [
       'server_name _;',
@@ -86,14 +124,14 @@ export class NginxManager {
 
     // HTTPS needs a certificate to answer at all; without one an unmatched
     // host would fall through to another site's block again.
-    if (options.cert) {
+    if (cert) {
       blocks.push(
         'server {',
         ...indent([
           `listen ${options.httpsPort} ssl;`,
           `listen [::]:${options.httpsPort} ssl;`,
-          `ssl_certificate ${options.cert.certFile};`,
-          `ssl_certificate_key ${options.cert.keyFile};`,
+          `ssl_certificate ${cert.certFile};`,
+          `ssl_certificate_key ${cert.keyFile};`,
           ...body
         ]),
         '}',
@@ -101,7 +139,7 @@ export class NginxManager {
       )
     }
 
-    writeFileSync(this.defaultVhostPath(), blocks.join('\n'), 'utf8')
+    return blocks.join('\n')
   }
 
   ensureRootConfig(): void {
@@ -127,12 +165,13 @@ export class NginxManager {
     const { project } = ctx
     const httpPort = ctx.httpPort ?? 80
     const httpsPort = ctx.httpsPort ?? 443
-    const listen = ctx.cert
+    const cert = usableCert(ctx.cert)
+    const listen = cert
       ? [`listen ${httpsPort} ssl;`, `listen [::]:${httpsPort} ssl;`, 'http2 on;']
       : [`listen ${httpPort};`, `listen [::]:${httpPort};`]
 
-    const tls = ctx.cert
-      ? [`ssl_certificate ${ctx.cert.certFile};`, `ssl_certificate_key ${ctx.cert.keyFile};`]
+    const tls = cert
+      ? [`ssl_certificate ${cert.certFile};`, `ssl_certificate_key ${cert.keyFile};`]
       : []
 
     const body =
@@ -145,7 +184,7 @@ export class NginxManager {
     // A secured site still has to answer on the HTTP port. Without this block
     // http://<site> falls through to whichever other vhost is the default
     // server for that port — serving someone else's project, or a 403.
-    const redirect = ctx.cert
+    const redirect = cert
       ? [
           'server {',
           ...indent([
@@ -343,7 +382,7 @@ export class NginxManager {
         'utf8'
       )
       const dropInCheck = await this.test()
-      if (!dropInCheck.ok) {
+      if (!dropInCheck.syntaxOk) {
         rmSync(dropIn, { force: true })
         throw new Error(`nginx rejected the config, reverted: ${dropInCheck.output}`)
       }
@@ -362,7 +401,7 @@ export class NginxManager {
     rmSync(staged, { force: true })
 
     const check = await this.test()
-    if (!check.ok) {
+    if (!check.syntaxOk) {
       // Put the original back rather than leaving nginx unable to start.
       await this.privileged.installFile(this.backupPath(), config)
       throw new Error(`nginx rejected the config, reverted: ${check.output}`)
@@ -421,8 +460,11 @@ export class NginxManager {
     // cannot read the user's projects at all.
     if (this.needsRoot([ports.httpPort, ports.httpsPort])) await this.ensureWorkerUser()
 
+    // `syntaxOk`, not `ok`: an unprivileged test cannot open log files a root
+    // master owns, and refusing to start on that would be refusing on a config
+    // that is fine. Whether nginx can open them is answered by starting it.
     const check = await this.test()
-    if (!check.ok) throw new Error(`nginx config test failed: ${check.output}`)
+    if (!check.syntaxOk) throw new Error(`nginx config test failed: ${check.output}`)
 
     if (this.needsRoot([ports.httpPort, ports.httpsPort])) {
       await this.privileged.run(binary)
@@ -588,14 +630,29 @@ export class NginxManager {
   }
 
   /** Validate before reloading — a bad vhost must not take every site down. */
-  async test(): Promise<{ ok: boolean; output: string }> {
+  /**
+   * Validate the whole config without needing root.
+   *
+   * `nginx -t` opens the configured pid file, which a root-started master owns —
+   * so a plain test fails with "permission denied" on a config that is perfectly
+   * valid, and every caller reads that as a broken vhost. Overriding `pid` to a
+   * path this user can write separates the two questions: this one is "is the
+   * config valid", and it should be answerable without a password.
+   */
+  async test(): Promise<NginxTestResult> {
     const binary = this.native.which('nginx')
-    if (!binary) return { ok: false, output: 'nginx is not installed' }
+    if (!binary) return { ok: false, syntaxOk: false, output: 'nginx is not installed' }
+    const pidFile = join(paths.run, 'nginx-test.pid')
     try {
-      const { stderr } = await exec(`${binary} -t`)
-      return { ok: true, output: stderr }
+      const { stderr } = await exec(`${binary} -t -g "pid ${pidFile};"`)
+      return { ok: true, syntaxOk: true, output: stderr }
     } catch (err) {
-      return { ok: false, output: (err as Error).message }
+      const output = (err as Error).message
+      // `-t` also opens every log file the config names. A root-started master
+      // created those as root, so an unprivileged test fails on a config that
+      // parsed perfectly — a different fact from "your vhost is malformed", and
+      // conflating them made a healthy setup look broken.
+      return { ok: false, syntaxOk: /syntax is ok/.test(output), output }
     }
   }
 
@@ -605,8 +662,12 @@ export class NginxManager {
    * if the unprivileged reload is refused.
    */
   async reload(): Promise<void> {
+    // Gated on syntax alone. A root-started master owns the log files, so the
+    // unprivileged test fails on a perfectly valid config — and gating on that
+    // meant every reload threw and every vhost change silently never took
+    // effect on exactly the setup Harbor recommends.
     const check = await this.test()
-    if (!check.ok) throw new Error(`nginx config test failed: ${check.output}`)
+    if (!check.syntaxOk) throw new Error(`nginx config test failed: ${check.output}`)
 
     // Nothing to reload, and asking for root to signal a process that isn't
     // there would put a password prompt in front of the user for no reason.

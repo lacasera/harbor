@@ -152,14 +152,28 @@ async function main(): Promise<void> {
       console.log('  ..   nginx is running as root; skipping the steps that restart it')
       step('vhost rendered for the site', Boolean(harbor.projects.nginx.read(started)))
       const test = await harbor.projects.nginx.test()
-      step('nginx accepts the generated config', test.ok, test.output.trim().split('\n').pop() ?? '')
+      // syntaxOk, not ok: a root master owns the log files this config names,
+      // so an unprivileged `nginx -t` cannot open them however valid it is.
+      // Report the syntax verdict, not the last stderr line — that line is the
+      // permission failure this check deliberately tolerates, and printing it
+      // beside "ok" reads as a contradiction.
+      step(
+        'nginx accepts the generated config',
+        test.syntaxOk,
+        test.syntaxOk ? 'syntax is ok' : (test.output.trim().split('\n').pop() ?? '')
+      )
+      // The server logs its listening line asynchronously after npm resolves.
+      await wait(2500)
       const lines = harbor.logs.query({ sources: [project.id], limit: 50 })
       step(
         'dev-server output reached the log aggregator',
         lines.some((l) => l.message.includes('listening on')),
         `${lines.length} lines`
       )
-      return
+      // Not `return`: that skipped the summary and, because the aggregator's
+      // file watchers hold the event loop open, left the process running with
+      // no output and nothing to indicate it had finished.
+      return summarise()
     }
 
     // The vhost is rendered on park; connect nginx so it is actually read.
@@ -270,6 +284,10 @@ async function main(): Promise<void> {
     rmSync(dir, { recursive: true, force: true })
   }
 
+  summarise()
+}
+
+function summarise(): never {
   const failed = results.filter(([, ok]) => !ok).length
   console.log(`\n${results.length - failed}/${results.length} steps passed`)
   process.exit(failed ? 1 : 0)

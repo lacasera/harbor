@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import type { RuntimeDescriptor, RuntimeId } from '../../../shared/runtime.js'
+import { useCallback, useEffect, useState } from 'react'
+import type { RuntimeDescriptor, RuntimeId, UpdateInfo } from '../../../shared/runtime.js'
 import type { ProjectDescriptor } from '../../../shared/project.js'
 import { invoke } from '../ipc/client.js'
+import { RuntimeConfigEditor } from './RuntimeConfigEditor.js'
 import { BrandTile } from './BrandIcon.js'
 
 export function RuntimesView({
@@ -49,7 +50,21 @@ export function RuntimesView({
     }
   }
 
+  const [editing, setEditing] = useState<string | null>(null)
+  const [updates, setUpdates] = useState<Record<string, UpdateInfo>>({})
+  const [checking, setChecking] = useState(false)
+
+  // Cached in main, so mounting the page is cheap; the button forces a refresh.
+  const loadUpdates = useCallback((force = false) => {
+    setChecking(true)
+    void invoke('runtimes:updates', force)
+      .then(setUpdates)
+      .finally(() => setChecking(false))
+  }, [])
+  useEffect(() => loadUpdates(), [loadUpdates])
+
   const totalVersions = runtimes.reduce((n, r) => n + r.installedVersions.length, 0)
+  const updateCount = Object.values(updates).filter((u) => u.available).length
 
   return (
     <>
@@ -59,8 +74,12 @@ export function RuntimesView({
           <div className="page-sub">
             {totalVersions} versions installed across {runtimes.length} runtimes · isolated under
             ~/.harbor
+            {updateCount > 0 && ` · ${updateCount} update${updateCount === 1 ? '' : 's'} available`}
           </div>
         </div>
+        <button type="button" className="btn" disabled={checking} onClick={() => loadUpdates(true)}>
+          {checking ? 'Checking…' : 'Check for updates'}
+        </button>
       </div>
 
       <div className="page-body">
@@ -147,8 +166,14 @@ export function RuntimesView({
                   )
                   const isDefault = runtime.defaultVersion === version
                   const key = `${runtime.id}#${version}`
+                  // Declared by the driver: runtimes with nothing worth editing
+                  // simply do not offer the button, and the UI never has to know
+                  // which ones those are.
+                  const hasConfig = runtime.configurable
+                  const update = updates[key]
                   return (
-                    <div key={version} className="rt-version">
+                    <div key={version}>
+                    <div className="rt-version">
                       <div className="hstack" style={{ gap: 8 }}>
                         <span
                           className="mono"
@@ -157,6 +182,16 @@ export function RuntimesView({
                           {runtime.displayName} {version}
                         </span>
                         {isDefault && <span className="pill default-ver">default</span>}
+                        {update?.available && update.major && (
+                          <span className="pill" style={{ color: 'var(--am)' }} title={update.action}>
+                            major
+                          </span>
+                        )}
+                        {update?.error && (
+                          <span className="small muted" title={update.error}>
+                            update check failed
+                          </span>
+                        )}
                       </div>
 
                       <div className="hstack" style={{ gap: 5 }}>
@@ -169,6 +204,32 @@ export function RuntimesView({
                       </div>
 
                       <div className="hstack" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                        {update?.available && (
+                          <button
+                            type="button"
+                            className="btn xs primary"
+                            disabled={busy === key}
+                            title={update.action}
+                            onClick={() =>
+                              void act(key, async () => {
+                                const next = await invoke('runtimes:update', runtime.id, version)
+                                loadUpdates(true)
+                                return next
+                              })
+                            }
+                          >
+                            {busy === key ? 'Updating…' : `Update to ${update.latest}`}
+                          </button>
+                        )}
+                        {hasConfig && (
+                          <button
+                            type="button"
+                            className="btn xs"
+                            onClick={() => setEditing(editing === key ? null : key)}
+                          >
+                            {editing === key ? 'Close' : 'Configure'}
+                          </button>
+                        )}
                         {!isDefault && (
                           <button
                             type="button"
@@ -194,6 +255,14 @@ export function RuntimesView({
                           Remove
                         </button>
                       </div>
+                    </div>
+                    {editing === key && (
+                      <RuntimeConfigEditor
+                        runtimeId={runtime.id}
+                        version={version}
+                        onClose={() => setEditing(null)}
+                      />
+                    )}
                     </div>
                   )
                 })}

@@ -11,6 +11,13 @@ files:
   - package.json
   # Resources Harbor writes at runtime live under ~/.harbor, not in the bundle.
 
+# The menu-bar icon is a real file rather than an inlined blob so it stays
+# reviewable, which means it has to be copied into the app bundle explicitly —
+# `files` above covers only the compiled output.
+extraResources:
+  - from: resources/tray
+    to: tray
+
 # Rebuilding native deps is unnecessary: everything Harbor spawns is an external
 # binary it manages itself, and there are no native node modules.
 npmRebuild: false

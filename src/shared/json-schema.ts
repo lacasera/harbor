@@ -11,8 +11,15 @@ export interface JSONSchema {
   description?: string
   default?: unknown
   enum?: unknown[]
+  /**
+   * Which band this field appears under in the generated form. Declared by the
+   * driver because only it knows what a field is FOR — the heuristic fallback
+   * put "Binary log" and "Server ID" under Storage, which is not wrong so much
+   * as meaningless.
+   */
+  section?: string
   /** UI hint: render as a password field, a directory picker, etc. */
-  format?: 'password' | 'port' | 'path' | 'directory' | 'uri' | 'email'
+  format?: 'password' | 'port' | 'path' | 'directory' | 'uri' | 'email' | 'textarea'
   minimum?: number
   maximum?: number
   minLength?: number

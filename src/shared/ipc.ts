@@ -1,10 +1,19 @@
 import type {
   ConfigUpdateResult,
   EnvBlock,
-  ServiceConfig,
-  ServiceDescriptor
+  ServiceDescriptor,
+  ServiceInstance,
+  ServiceInstanceDescriptor,
+  ServiceInstanceKey,
+  ServiceInstanceRef
 } from './service.js'
-import type { RuntimeDescriptor, ResolvedVersion, RuntimeId } from './runtime.js'
+import type {
+  ResolvedVersion,
+  RuntimeConfigFile,
+  RuntimeDescriptor,
+  RuntimeId,
+  UpdateInfo
+} from './runtime.js'
 import type {
   ProjectDescriptor,
   ProjectEnvFile,
@@ -75,17 +84,28 @@ export interface AppSettings {
 export interface IpcContract {
   'app:info': [[], { name: string; version: string; homeDir: string }]
   'app:checkForUpdates': [[], UpdateStatus]
+  /**
+   * Open a URL in the user's browser. An explicit call rather than relying on
+   * the window-open handler intercepting an anchor: this way a click either
+   * works or reports why, instead of doing nothing observable.
+   */
+  'app:openExternal': [[url: string], void]
 
+  /** The catalogue: every service, each carrying its instances. */
   'services:list': [[], ServiceDescriptor[]]
   'services:install': [[serviceId: string, version: string], void]
-  'services:start': [[serviceId: string], ServiceDescriptor]
-  'services:stop': [[serviceId: string], ServiceDescriptor]
+  /**
+   * Every channel below acts on ONE instance. `serviceId` alone no longer
+   * identifies anything actionable — two projects can each own a MySQL.
+   */
+  'services:start': [[ref: ServiceInstanceRef], ServiceInstanceDescriptor]
+  'services:stop': [[ref: ServiceInstanceRef], ServiceInstanceDescriptor]
   'services:updateConfig': [
-    [serviceId: string, config: Partial<ServiceConfig>],
+    [ref: ServiceInstanceRef, patch: Partial<ServiceInstance>],
     ConfigUpdateResult
   ]
-  'services:envBlock': [[serviceId: string], EnvBlock]
-  'services:envBlocks': [[serviceIds: string[]], EnvBlock[]]
+  'services:envBlock': [[ref: ServiceInstanceRef], EnvBlock]
+  'services:envBlocks': [[refs: ServiceInstanceRef[]], EnvBlock[]]
 
   'runtimes:list': [[], RuntimeDescriptor[]]
   'runtimes:available': [[runtimeId: RuntimeId], string[]]
@@ -93,11 +113,20 @@ export interface IpcContract {
   'runtimes:uninstall': [[runtimeId: RuntimeId, version: string], void]
   'runtimes:resolve': [[runtimeId: RuntimeId, projectPath: string], ResolvedVersion]
   'runtimes:setDefault': [[runtimeId: RuntimeId, version: string], RuntimeDescriptor[]]
+  /** Editable configuration for one installed version, e.g. php.ini. */
+  /** Newer versions of what is installed, keyed `<runtimeId>#<version>`. */
+  'runtimes:updates': [[force?: boolean], Record<string, UpdateInfo>]
+  'runtimes:update': [[runtimeId: RuntimeId, version: string], RuntimeDescriptor[]]
+  'runtimes:configFiles': [[runtimeId: RuntimeId, version: string], RuntimeConfigFile[]]
+  'runtimes:writeConfig': [
+    [runtimeId: RuntimeId, version: string, fileId: string, content: string],
+    RuntimeConfigFile[]
+  ]
 
   'projects:list': [[], ProjectDescriptor[]]
   'projects:park': [[dir: string], ProjectDescriptor[]]
   'projects:link': [[dir: string], ProjectDescriptor]
-  'projects:forget': [[projectId: string], void]
+  'projects:forget': [[projectId: string, options?: { destroyData?: boolean }], void]
   'projects:start': [[projectId: string], ProjectDescriptor]
   'projects:stop': [[projectId: string], ProjectDescriptor]
   'projects:update': [
@@ -108,7 +137,6 @@ export interface IpcContract {
         startCommandOverride?: string | null
         runtimeOverride?: { runtime: RuntimeId; version: string } | null
         secure?: boolean
-        serviceIds?: string[]
         /** Re-run detection and drop any manual type override. */
         redetectType?: boolean
       }
@@ -134,6 +162,21 @@ export interface IpcContract {
     ProjectDescriptor
   ]
   'projects:removeProcess': [[projectId: string, specId: string], ProjectDescriptor]
+
+  /**
+   * Per-project service stacks. Attaching gives the project its own instance —
+   * its own ports, credentials, configuration and data — rather than pointing
+   * it at a shared one.
+   */
+  /**
+   * These return the catalogue rather than the project: a project record no
+   * longer says anything about its services, and returning the catalogue means
+   * the caller cannot be left waiting on a push to see what it just did.
+   */
+  'projects:attachService': [[projectId: string, serviceId: string], ServiceDescriptor[]]
+  'projects:detachService': [[projectId: string, serviceId: string], ServiceDescriptor[]]
+  'projects:startStack': [[projectId: string], ServiceDescriptor[]]
+  'projects:stopStack': [[projectId: string], ServiceDescriptor[]]
 
   'processes:list': [[], ProcessHandle[]]
   'processes:stop': [[processId: string], void]
@@ -178,8 +221,12 @@ export type IpcResult<C extends IpcChannel> = IpcContract[C][1]
 /** Main → renderer pushes. */
 export interface IpcEvents {
   'log:line': LogLine
-  'service:changed': ServiceDescriptor
+  'service:changed': ServiceInstanceDescriptor
+  /** An instance was removed; the key it had. */
+  'service:detached': ServiceInstanceKey
   'project:changed': ProjectDescriptor
+  /** A project was forgotten; the id it had. */
+  'project:forgotten': string
   'process:changed': ProcessHandle
   'usage:sample': ResourceUsage[]
   /** A project's sources changed; its cached analysis was dropped. */

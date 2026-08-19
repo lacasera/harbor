@@ -1,3 +1,5 @@
+import type { UpdateInfo } from '../../shared/runtime.js'
+import { checkManagedUpdate } from './updates.js'
 import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
@@ -74,4 +76,20 @@ export class NodeRuntime implements RuntimeDriver {
     }
     return null
   }
+  checkUpdate(version: string): Promise<UpdateInfo> {
+    return checkManagedUpdate(version, () => this.availableVersions(), 'Node.js')
+  }
+
+  /**
+   * Installs the newer version; the old one stays. Removing it would break any
+   * project pinned to it, and Harbor manages versions precisely so several can
+   * coexist.
+   */
+  async update(version: string): Promise<string> {
+    const info = await this.checkUpdate(version)
+    if (!info.latest || !info.available) return version
+    await this.install(info.latest)
+    return info.latest
+  }
+
 }

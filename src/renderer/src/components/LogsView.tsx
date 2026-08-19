@@ -2,15 +2,22 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LogLevel, LogLine } from '../../../shared/logs.js'
 import { invoke } from '../ipc/client.js'
 import { formatTime, tintFor } from './primitives.js'
+import { labelForSource } from './log-labels.js'
 
 const LEVELS: LogLevel[] = ['info', 'warn', 'error']
+
+/** Callers that pass no labels — the compact panels — never show a source. */
+const EMPTY_LABELS = new Map<string, string>()
 
 /** Shared row renderer — the unified viewer and the per-entity panes agree. */
 export function LogRows({
   lines,
+  labels,
   compact
 }: {
   lines: LogLine[]
+  /** Source id → readable name; only needed when the source column is shown. */
+  labels?: Map<string, string>
   compact?: boolean
 }): React.JSX.Element {
   if (!lines.length) {
@@ -33,7 +40,7 @@ export function LogRows({
                     repeating the project name on every row. */}
                 {line.stream && line.stream !== 'stdout' && line.stream !== 'stderr'
                   ? line.stream
-                  : line.source}
+                  : labelForSource(line.source, labels ?? EMPTY_LABELS)}
               </span>
             </span>
           )}
@@ -48,12 +55,15 @@ export function LogRows({
 export function LogsView({
   lines,
   sources,
+  labels,
   follow,
   onToggleFollow,
   onClear
 }: {
   lines: LogLine[]
   sources: string[]
+  /** Source id → readable name. Ids stay stable; only the display changes. */
+  labels: Map<string, string>
   follow: boolean
   onToggleFollow: () => void
   onClear: () => void
@@ -75,13 +85,14 @@ export function LogsView({
           // "unknown" has no chip of its own; it rides along with info.
           if (l.level !== 'unknown' && LEVELS.includes(l.level) && !levels[l.level]) return false
           if (l.level === 'unknown' && !levels.info) return false
-          if (search && !`${l.message}${l.source}`.toLowerCase().includes(search.toLowerCase())) {
+          const haystack = `${l.message}${l.source}${labelForSource(l.source, labels)}`
+          if (search && !haystack.toLowerCase().includes(search.toLowerCase())) {
             return false
           }
           return true
         })
         .slice(-400),
-    [lines, sourceOff, levels, search]
+    [lines, sourceOff, levels, search, labels]
   )
 
   useEffect(() => {
@@ -166,7 +177,7 @@ export function LogsView({
                   className="dot sm"
                   style={{ background: on ? tintFor(source) : 'var(--tx3)' }}
                 />
-                {source}
+                {labelForSource(source, labels)}
               </button>
             )
           })}

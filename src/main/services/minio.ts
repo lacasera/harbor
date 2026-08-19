@@ -5,7 +5,14 @@ import { Readable } from 'node:stream'
 import type { ProcessHandle } from '../../shared/process.js'
 import type { LogSource } from '../../shared/logs.js'
 import type { JSONSchema } from '../../shared/json-schema.js'
-import type { ServiceConfig, ServiceDriver, ServiceStatus } from '../../shared/service.js'
+import {
+  instanceKey,
+  type ServiceConsole,
+  type ServiceDriver,
+  type ServiceInstance,
+  type ServiceInstanceRef,
+  type ServiceStatus
+} from '../../shared/service.js'
 import type { NativeBackend } from '../backends/native-backend.js'
 import type { ProcessManager } from '../core/process-manager.js'
 import { serviceDataDir, serviceDir, serviceLogFile } from '../core/paths.js'
@@ -61,14 +68,16 @@ export class MinioDriver implements ServiceDriver {
     required: ['port', 'consolePort', 'rootUser', 'rootPassword']
   }
 
-  readonly logSources: LogSource[] = [
-    { kind: 'stdout', label: 'minio' },
-    { kind: 'file', path: serviceLogFile('minio'), label: 'minio.log' }
-  ]
+  logSources(ref: ServiceInstanceRef): LogSource[] {
+    return [
+      { kind: 'stdout', label: instanceKey(ref) },
+      { kind: 'file', path: serviceLogFile(ref.owner, ref.serviceId), label: 'minio.log' }
+    ]
+  }
 
   /**
-   * Templates resolved against the live ServiceConfig at export time — never
-   * against these defaults. See ServiceRegistry.envBlock.
+   * Templates resolved against the live instance at export time — never against
+   * these defaults. See ServiceInstances.envBlock.
    */
   readonly envHints: Record<string, string> = {
     AWS_ACCESS_KEY_ID: '${rootUser}',
@@ -79,9 +88,6 @@ export class MinioDriver implements ServiceDriver {
     AWS_URL: 'http://${host}:${port}/local',
     AWS_USE_PATH_STYLE_ENDPOINT: 'true'
   }
-
-  /** Config of the currently running instance — health must probe live ports. */
-  private running: ServiceConfig | null = null
 
   constructor(
     private readonly native: NativeBackend,
@@ -113,50 +119,56 @@ export class MinioDriver implements ServiceDriver {
     chmodSync(target, 0o755)
   }
 
-  configuredPorts(config: ServiceConfig): number[] {
-    return [Number(config.values.port ?? 9000), Number(config.values.consolePort ?? 9001)]
+  console(instance: ServiceInstance): ServiceConsole {
+    return {
+      label: 'Open console',
+      url: `http://127.0.0.1:${Number(instance.values.consolePort ?? 9001)}`
+    }
   }
 
-  async start(config: ServiceConfig): Promise<ProcessHandle> {
+  configuredPorts(instance: ServiceInstance): number[] {
+    return [Number(instance.values.port ?? 9000), Number(instance.values.consolePort ?? 9001)]
+  }
+
+  async start(instance: ServiceInstance): Promise<ProcessHandle> {
     const versions = await this.installedVersions()
-    const version = versions.includes(config.version) ? config.version : versions[0]
+    const version = versions.includes(instance.version) ? instance.version : versions[0]
     if (!version) throw new Error('MinIO is not installed yet')
 
-    const data = (config.values.dataDir as string) || serviceDataDir(this.id)
+    const data =
+      (instance.values.dataDir as string) || serviceDataDir(instance.owner, instance.serviceId)
     mkdirSync(data, { recursive: true })
 
-    this.running = config
     return this.native.start({
-      serviceId: this.id,
+      ref: { owner: instance.owner, serviceId: instance.serviceId },
       displayName: this.displayName,
       command: this.binaryPath(version),
       args: [
         'server',
         data,
         '--address',
-        `:${config.values.port ?? 9000}`,
+        `:${instance.values.port ?? 9000}`,
         '--console-address',
-        `:${config.values.consolePort ?? 9001}`
+        `:${instance.values.consolePort ?? 9001}`
       ],
       env: {
-        MINIO_ROOT_USER: String(config.values.rootUser ?? 'minioadmin'),
-        MINIO_ROOT_PASSWORD: String(config.values.rootPassword ?? 'minioadmin'),
-        MINIO_REGION: String(config.values.region ?? 'us-east-1')
+        MINIO_ROOT_USER: String(instance.values.rootUser ?? 'minioadmin'),
+        MINIO_ROOT_PASSWORD: String(instance.values.rootPassword ?? 'minioadmin'),
+        MINIO_REGION: String(instance.values.region ?? 'us-east-1')
       }
     })
   }
 
-  async stop(): Promise<void> {
-    await this.native.stop(this.id)
-    this.running = null
+  async stop(instance: ServiceInstance): Promise<void> {
+    await this.native.stop({ owner: instance.owner, serviceId: instance.serviceId })
   }
 
-  async healthCheck(): Promise<ServiceStatus> {
-    const handle = this.processes.findByOwner('service', this.id)
+  async healthCheck(instance: ServiceInstance): Promise<ServiceStatus> {
+    const handle = this.processes.findByOwner('service', instanceKey(instance))
     if (!handle) return { health: 'stopped', ports: [] }
 
-    const port = Number(this.running?.values.port ?? 9000)
-    const consolePort = Number(this.running?.values.consolePort ?? 9001)
+    const port = Number(instance.values.port ?? 9000)
+    const consolePort = Number(instance.values.consolePort ?? 9001)
     try {
       const res = await fetch(`http://127.0.0.1:${port}/minio/health/live`, {
         signal: AbortSignal.timeout(1500)

@@ -31,6 +31,14 @@ export interface SpawnRequest {
   /** Preferred port when allocating for the first time. */
   preferredPort?: number
   /**
+   * Start in its own process group, so the process outlives whatever spawned
+   * it. For daemons that serve the user's sites — a PHP-FPM pool, dnsmasq —
+   * being torn down because the thing that started them went away is never
+   * right; Harbor stops them deliberately in `shutdown`, and reclaims them on
+   * the next launch if it never got the chance.
+   */
+  detached?: boolean
+  /**
    * Stream name for the log viewer. Defaults to stdout/stderr; a project's
    * companions set it so "queue" and "vite" are distinguishable under the one
    * project source.
