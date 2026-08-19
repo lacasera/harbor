@@ -1,0 +1,116 @@
+/*
+ * Design tokens, ported verbatim from the Harbor design canvas.
+ * Dark is the default; [data-theme] on the app root switches the palette.
+ * Nothing outside this file hardcodes a colour.
+ */
+:root,
+[data-theme='dark'] {
+  --bg: oklch(0.165 0.008 265);
+  --sb: oklch(0.205 0.008 265);
+  --pn: oklch(0.215 0.008 265);
+  --pn2: oklch(0.245 0.009 265);
+  --ln: oklch(0.295 0.010 265);
+  --ln2: oklch(0.255 0.009 265);
+  --tx: oklch(0.955 0.004 265);
+  --tx2: oklch(0.735 0.010 265);
+  --tx3: oklch(0.575 0.012 265);
+  --ac: oklch(0.655 0.155 258);
+  --acb: oklch(0.30 0.06 258);
+  --gn: oklch(0.735 0.155 152);
+  --rd: oklch(0.655 0.185 22);
+  --am: oklch(0.795 0.140 78);
+  --pu: oklch(0.700 0.150 310);
+  --shadow: 0 1px 2px oklch(0 0 0 / 0.5), 0 8px 24px oklch(0 0 0 / 0.28);
+  --mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial,
+    sans-serif;
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --bg: oklch(0.972 0.003 265);
+  --sb: oklch(0.955 0.004 265);
+  --pn: oklch(1 0 0);
+  --pn2: oklch(0.972 0.004 265);
+  --ln: oklch(0.895 0.006 265);
+  --ln2: oklch(0.930 0.005 265);
+  --tx: oklch(0.255 0.012 265);
+  --tx2: oklch(0.470 0.012 265);
+  --tx3: oklch(0.615 0.012 265);
+  --ac: oklch(0.545 0.170 258);
+  --acb: oklch(0.905 0.035 258);
+  --gn: oklch(0.560 0.145 152);
+  --rd: oklch(0.560 0.185 22);
+  --am: oklch(0.640 0.135 68);
+  --pu: oklch(0.545 0.160 310);
+  --shadow: 0 1px 2px oklch(0.2 0.02 265 / 0.10), 0 8px 24px oklch(0.2 0.02 265 / 0.08);
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--tx);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+a {
+  color: var(--ac);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ln);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input,
+select,
+button,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}

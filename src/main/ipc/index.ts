@@ -54,6 +54,12 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('runtimes:install', (id, version) => harbor.runtimes.get(id).install(version))
   handle('runtimes:uninstall', (id, version) => harbor.runtimes.get(id).uninstall(version))
   handle('runtimes:resolve', (id, path) => harbor.runtimes.resolve(id, path))
+  handle('runtimes:setDefault', async (id, version) => {
+    harbor.store.update((s) => {
+      s.runtimeDefaults[id] = version
+    })
+    return harbor.runtimes.describeAll()
+  })
 
   // ── projects ────────────────────────────────────────────────────────────
   handle('projects:list', () => harbor.projects.describeAll())
@@ -89,6 +95,17 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
     const results = await harbor.intelligence.analyze(harbor.projects.find(projectId))
     return harbor.intelligence.mermaid(results, kind)
   })
+
+  // ── settings & system ───────────────────────────────────────────────────
+  handle('settings:get', () => ({ ...harbor.store.get().settings }))
+  handle('settings:update', (patch) => {
+    harbor.store.update((s) => {
+      Object.assign(s.settings, patch)
+    })
+    return { ...harbor.store.get().settings }
+  })
+  handle('tls:status', () => harbor.tls.status())
+  handle('dns:status', () => harbor.dns.status(harbor.store.get().settings.tld))
 
   // ── nginx ───────────────────────────────────────────────────────────────
   handle('nginx:status', () => harbor.projects.nginx.status())

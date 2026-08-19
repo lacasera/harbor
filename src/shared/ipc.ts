@@ -5,6 +5,13 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 
+/** User-editable app settings, surfaced on the Settings screen. */
+export interface AppSettings {
+  tld: string
+  parkedDirs: string[]
+  autoStartServices: boolean
+}
+
 /**
  * The single source of truth for the renderer/main boundary. Every entry is
  * `[argsTuple, result]`. Adding a channel here and nowhere else is a type
@@ -26,6 +33,7 @@ export interface IpcContract {
   'runtimes:install': [[runtimeId: RuntimeId, version: string], void]
   'runtimes:uninstall': [[runtimeId: RuntimeId, version: string], void]
   'runtimes:resolve': [[runtimeId: RuntimeId, projectPath: string], ResolvedVersion]
+  'runtimes:setDefault': [[runtimeId: RuntimeId, version: string], RuntimeDescriptor[]]
 
   'projects:list': [[], ProjectDescriptor[]]
   'projects:park': [[dir: string], ProjectDescriptor[]]
@@ -57,6 +65,12 @@ export interface IpcContract {
 
   'intelligence:analyze': [[projectId: string, force?: boolean], AnalysisResult[]]
   'intelligence:mermaid': [[projectId: string, kind: 'erDiagram' | 'classDiagram'], string]
+
+  'settings:get': [[], AppSettings]
+  'settings:update': [[patch: Partial<AppSettings>], AppSettings]
+
+  'tls:status': [[], { installed: boolean; caInstalled: boolean }]
+  'dns:status': [[], { installed: boolean; configured: boolean }]
 
   'nginx:status': [[], { installed: boolean; running: boolean; configPath: string | null }]
   'nginx:reload': [[], void]
