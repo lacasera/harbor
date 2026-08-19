@@ -99,6 +99,33 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
       status.nginx.listening.includes(settings.httpsPort)
   )
 
+  /**
+   * Changing the TLD is only half the job: macOS needs a resolver file for the
+   * new suffix or nothing resolves, which is exactly the state a user lands in
+   * if the change quietly succeeds. Offer that step immediately, as one prompt
+   * caused by one deliberate click.
+   */
+  const applyTld = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      setSettings(await invoke('settings:update', { tld }))
+      const dns = await invoke('dns:status')
+      setStatus((s) => (s ? { ...s, dns } : s))
+      if (!dns.resolverConfigured) {
+        const next = await invoke('dns:configureResolver')
+        setStatus((s) => (s ? { ...s, dns: next } : s))
+      }
+    } catch (err) {
+      setError(
+        `${(err as Error).message} — sites are re-homed, but *.${tld} will not resolve until ` +
+          `the resolver below is written.`
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const patch = async (next: Partial<AppSettings>): Promise<void> => {
     setError(null)
     try {
@@ -135,11 +162,19 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                   style={{ width: 110 }}
                   value={tld}
                   onChange={(e) => setTld(e.target.value.replace(/^\./, ''))}
-                  onBlur={() => tld && tld !== settings?.tld && void patch({ tld })}
                 />
+                <button
+                  type="button"
+                  className="btn xs outline-ac"
+                  disabled={busy || !tld || tld === settings?.tld}
+                  onClick={() => void applyTld()}
+                >
+                  {busy ? 'Working…' : 'Apply'}
+                </button>
                 <span className="small muted">
-                  every site is re-homed; you then need a resolver for{' '}
-                  <span className="mono">.{tld || 'test'}</span> below
+                  {tld === settings?.tld
+                    ? 'every site is re-homed on change'
+                    : `re-homes every site to .${tld}`}
                 </span>
               </div>
             </div>

@@ -48,6 +48,8 @@ export interface NginxStatus {
   runningAs: string | null
   /** Ports the running master is actually bound to. */
   listening: number[]
+  /** The user nginx workers run as; `nobody` cannot read parked projects. */
+  workerUser: string | null
 }
 
 /** User-editable app settings, surfaced on the Settings screen. */

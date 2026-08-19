@@ -12,7 +12,9 @@ import assert from 'node:assert/strict'
 import {
   NginxManager,
   insertHarborInclude,
-  removeHarborInclude
+  removeHarborInclude,
+  setWorkerUser,
+  removeWorkerUser
 } from '../src/main/projects/nginx-manager.js'
 import { createPhpFrameworkRegistry } from '../src/main/projects/php-frameworks/index.js'
 import { interpolate, defaultsFor, validate } from '../src/main/services/registry.js'
@@ -21,6 +23,7 @@ import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent
 import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
+import { quoteForAppleScript } from '../src/main/core/privileged-helper.js'
 import { MinioDriver } from '../src/main/services/minio.js'
 import type { Project } from '../src/shared/project.js'
 
@@ -428,6 +431,18 @@ check('mermaid ERD drops relations to unparsed models', () => {
   assert.doesNotMatch(diagram, /Ghost/)
 })
 
+check('privileged commands are escaped for AppleScript', () => {
+  // This string is interpolated into a command that runs as root, so a
+  // mis-escaped quote is a command-injection bug, not a formatting nit.
+  assert.equal(quoteForAppleScript('echo hi'), '"echo hi"')
+  assert.equal(quoteForAppleScript('printf "x"'), '"printf \\"x\\""')
+  assert.equal(quoteForAppleScript('a\\b'), '"a\\\\b"')
+  // A closing quote must not be able to escape the literal.
+  const hostile = 'x" with administrator privileges; rm -rf /; "'
+  const quoted = quoteForAppleScript(hostile)
+  assert.equal(quoted.match(/(?<!\\)"/g)?.length, 2, 'only the delimiters are unescaped quotes')
+})
+
 check('start commands resolve to absolute binaries', () => {
   // ProcessManager spawns with shell:false, so a bare command must be resolved
   // or the spawn fails with ENOENT.
@@ -460,6 +475,40 @@ http {
     }
 }
 `
+
+check('worker user is set so a root master can read parked projects', () => {
+  // A root master drops workers to the `user` directive; Homebrew ships it
+  // commented out, so they become nobody and cannot read /Users at all.
+  const out = setWorkerUser(NGINX_CONF, 'william', 'staff')
+  assert.ok(out, 'expected a modified config')
+  const lines = (out as string).split('\n')
+  const at = lines.findIndex((l) => l.trim() === 'user william staff;')
+  assert.ok(at >= 0, 'directive present')
+
+  // It must land in the main context, before `http {`.
+  const httpAt = lines.findIndex((l) => /^\s*http\s*\{/.test(l))
+  assert.ok(at < httpAt, 'user must precede the http block')
+})
+
+check('setting the worker user twice is a no-op', () => {
+  const once = setWorkerUser(NGINX_CONF, 'william', 'staff') as string
+  assert.equal(setWorkerUser(once, 'william', 'staff'), null)
+})
+
+check('an existing user directive is replaced and remembered', () => {
+  const withUser = 'user nobody;\n\nhttp {\n    server {\n        listen 80;\n    }\n}\n'
+  const out = setWorkerUser(withUser, 'william', 'staff') as string
+  assert.match(out, /^user william staff;$/m)
+  assert.match(out, /# was: user nobody;/)
+  // And reverting restores exactly what was there.
+  assert.equal(removeWorkerUser(out), withUser)
+})
+
+check('reverting the worker user restores the original', () => {
+  const out = setWorkerUser(NGINX_CONF, 'william', 'staff') as string
+  assert.equal(removeWorkerUser(out), NGINX_CONF)
+  assert.equal(removeWorkerUser(NGINX_CONF), null)
+})
 
 check('include lands inside the top-level http block', () => {
   const out = insertHarborInclude(NGINX_CONF, INCLUDE)

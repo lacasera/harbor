@@ -18,6 +18,9 @@ import { HarborApp } from '../src/main/app.js'
 import { isFree } from '../src/main/core/port-allocator.js'
 
 const execFile = promisify(execFileCb)
+
+// Never open an auth dialog from a verification run.
+process.env.HARBOR_NO_PROMPT = '1'
 const NGINX = '/opt/homebrew/bin/nginx'
 
 /**
@@ -118,6 +121,25 @@ async function main(): Promise<void> {
       swept.failed.length === 0,
       `${swept.written} written, ${swept.removed} removed`
     )
+
+    // A root-owned master belongs to the user's real setup — it serves :80/:443
+    // and restarting it needs a password. This check runs unprivileged, so it
+    // verifies everything up to nginx and says plainly what it skipped.
+    const owner = (await harbor.projects.nginx.status()).runningAs
+    const canDriveNginx = owner !== 'root'
+    if (!canDriveNginx) {
+      console.log('  ..   nginx is running as root; skipping the steps that restart it')
+      step('vhost rendered for the site', Boolean(harbor.projects.nginx.read(started)))
+      const test = await harbor.projects.nginx.test()
+      step('nginx accepts the generated config', test.ok, test.output.trim().split('\n').pop() ?? '')
+      const lines = harbor.logs.query({ sources: [project.id], limit: 50 })
+      step(
+        'dev-server output reached the log aggregator',
+        lines.some((l) => l.message.includes('listening on')),
+        `${lines.length} lines`
+      )
+      return
+    }
 
     // The vhost is rendered on park; connect nginx so it is actually read.
     await harbor.projects.nginx.connect()

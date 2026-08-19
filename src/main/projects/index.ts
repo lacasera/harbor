@@ -242,6 +242,9 @@ export class ProjectManager extends EventEmitter {
         })
 
         await this.writeVhost(project)
+        // Without this the renderer keeps showing the old domain until the
+        // app is relaunched — the rename looked like it had not happened.
+        await this.emitChanged(project)
         renamed.push([from, to])
       } catch (err) {
         failed.push([to, (err as Error).message])

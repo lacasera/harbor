@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { userInfo } from 'node:os'
 import { join } from 'node:path'
 import { exec as execCb } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -305,6 +306,8 @@ export class NginxManager {
   }
 
   async disconnect(): Promise<void> {
+    await this.revertWorkerUser().catch(() => undefined)
+
     const dropIn = this.dropInPath()
     if (dropIn && existsSync(dropIn)) {
       rmSync(dropIn, { force: true })
@@ -349,6 +352,10 @@ export class NginxManager {
     const binary = this.native.which('nginx')
     if (!binary) throw new Error('nginx is not installed — install it with: brew install nginx')
 
+    // Must happen before the config test: a root master with nobody workers
+    // cannot read the user's projects at all.
+    if (this.needsRoot([ports.httpPort, ports.httpsPort])) await this.ensureWorkerUser()
+
     const check = await this.test()
     if (!check.ok) throw new Error(`nginx config test failed: ${check.output}`)
 
@@ -379,6 +386,45 @@ export class NginxManager {
     await this.start(ports)
   }
 
+  /**
+   * Make nginx workers run as the user who owns the parked projects. Only
+   * needed for a root master; an unprivileged nginx already runs as them.
+   */
+  async ensureWorkerUser(): Promise<void> {
+    const config = this.systemConfigPath()
+    if (!config) return
+
+    const { username } = userInfo()
+    const next = setWorkerUser(readFileSync(config, 'utf8'), username, 'staff')
+    if (next === null) return
+
+    const staged = join(paths.nginx, 'nginx.conf.worker')
+    writeFileSync(staged, next, 'utf8')
+    await this.privileged.installFile(staged, config, this.backupPath())
+    rmSync(staged, { force: true })
+  }
+
+  async revertWorkerUser(): Promise<void> {
+    const config = this.systemConfigPath()
+    if (!config) return
+    const next = removeWorkerUser(readFileSync(config, 'utf8'))
+    if (next === null) return
+    const staged = join(paths.nginx, 'nginx.conf.worker')
+    writeFileSync(staged, next, 'utf8')
+    await this.privileged.installFile(staged, config)
+    rmSync(staged, { force: true })
+  }
+
+  workerUser(): string | null {
+    const config = this.systemConfigPath()
+    if (!config) return null
+    try {
+      return /^\s*user\s+(\S+)/m.exec(readFileSync(config, 'utf8'))?.[1]?.replace(';', '') ?? null
+    } catch {
+      return null
+    }
+  }
+
   async status(): Promise<{
     installed: boolean
     running: boolean
@@ -390,6 +436,8 @@ export class NginxManager {
     runningAs: string | null
     /** Ports the running master is actually listening on. */
     listening: number[]
+    /** The user nginx workers run as; `nobody` cannot read parked projects. */
+    workerUser: string | null
   }> {
     const binary = this.native.which('nginx')
     const harborConfig = this.harborConfigPath()
@@ -402,7 +450,8 @@ export class NginxManager {
         harborConfig,
         strategy: null,
         runningAs: null,
-        listening: []
+        listening: [],
+        workerUser: null
       }
     }
     const running = await exec('/usr/bin/pgrep -x nginx')
@@ -416,7 +465,8 @@ export class NginxManager {
       harborConfig,
       strategy: this.strategy(),
       runningAs: await this.masterUser(),
-      listening: await this.listeningPorts()
+      listening: await this.listeningPorts(),
+      workerUser: this.workerUser()
     }
   }
 
@@ -496,6 +546,66 @@ export class NginxManager {
 }
 
 export const HARBOR_MARKER = '# Added by Harbor'
+export const WORKER_MARKER = '# Harbor: workers run as the user'
+
+/**
+ * Force nginx workers to run as a given user.
+ *
+ * A root master drops its workers to the `user` directive, which Homebrew
+ * ships commented out — so they become `nobody`, which cannot read anything
+ * under /Users/<someone>. The result is a 403 on the docroot and a 502 on the
+ * FPM socket, with nothing obviously misconfigured. `user` is a main-context
+ * directive, so it cannot live in the drop-in include and has to be set here.
+ *
+ * Returns null when the file already says exactly this.
+ */
+export function setWorkerUser(source: string, user: string, group: string): string | null {
+  const directive = `user ${user} ${group};`
+  const lines = source.split('\n')
+
+  const activeIndex = lines.findIndex((line) => /^\s*user\s+\S+/.test(line))
+  if (activeIndex !== -1 && lines[activeIndex]?.trim() === directive) return null
+
+  if (activeIndex !== -1) {
+    // Replace an existing directive, keeping the original commented above it
+    // so the change is visible and reversible by hand.
+    const previous = lines[activeIndex] as string
+    lines.splice(activeIndex, 1, WORKER_MARKER, `# was: ${previous.trim()}`, directive)
+    return lines.join('\n')
+  }
+
+  // No active directive: insert before the first non-comment line so it stays
+  // in the main context.
+  const insertAt = lines.findIndex((line) => line.trim() && !line.trim().startsWith('#'))
+  lines.splice(Math.max(insertAt, 0), 0, WORKER_MARKER, directive, '')
+  return lines.join('\n')
+}
+
+/** Undo setWorkerUser, restoring any directive it replaced. */
+export function removeWorkerUser(source: string): string | null {
+  if (!source.includes(WORKER_MARKER)) return null
+
+  const out: string[] = []
+  const lines = source.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string
+    if (!line.includes(WORKER_MARKER)) {
+      out.push(line)
+      continue
+    }
+    // Marker, then optionally "# was: <original>", then our directive.
+    let cursor = i + 1
+    const was = /^#\s*was:\s*(.+)$/.exec(lines[cursor]?.trim() ?? '')
+    if (was) {
+      out.push(`${(lines[cursor] as string).match(/^\s*/)?.[0] ?? ''}${was[1]}`)
+      cursor++
+    }
+    if (/^\s*user\s+\S+/.test(lines[cursor] ?? '')) cursor++
+    if ((lines[cursor] ?? '').trim() === '' && !was) cursor++
+    i = cursor - 1
+  }
+  return out.join('\n')
+}
 
 /**
  * Insert Harbor's include as the first directive inside the top-level `http {}`
