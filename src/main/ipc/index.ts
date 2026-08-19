@@ -9,6 +9,7 @@ import type {
 } from '../../shared/ipc.js'
 import type { HarborApp } from '../app.js'
 import { HARBOR_HOME } from '../core/paths.js'
+import { Updater } from '../updater.js'
 
 /** Typed `handle` — the channel name pins both the args and the return type. */
 function makeHandle(
@@ -50,12 +51,15 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
     send('analysis:invalidated', projectId)
   )
 
+  const updater = new Updater(harbor.logs)
+
   // ── app ─────────────────────────────────────────────────────────────────
   handle('app:info', () => ({
     name: 'Harbor',
     version: app.getVersion(),
     homeDir: HARBOR_HOME
   }))
+  handle('app:checkForUpdates', () => updater.check())
 
   // ── services ────────────────────────────────────────────────────────────
   handle('services:list', () => harbor.services.describeAll())

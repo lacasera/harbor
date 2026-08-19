@@ -1,18 +1,62 @@
 appId: dev.harbor.app
 productName: Harbor
+copyright: Copyright © 2026
+
 directories:
   buildResources: build
   output: release
+
 files:
   - out/**
-  - resources/**
   - package.json
+  # Resources Harbor writes at runtime live under ~/.harbor, not in the bundle.
+
+# Rebuilding native deps is unnecessary: everything Harbor spawns is an external
+# binary it manages itself, and there are no native node modules.
+npmRebuild: false
+
 mac:
   category: public.app-category.developer-tools
+  icon: build/icon.icns
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Harbor spawns managed binaries (nginx, dnsmasq, MinIO) and reads the user's
+  # project directories, so it must not run sandboxed.
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    # Harbor manages long-running services; it should keep running with no
+    # window open rather than quitting and stopping everything.
+    LSUIElement: false
+    NSHumanReadableCopyright: Copyright © 2026
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.dmg
+  contents:
+    - x: 140
+      y: 200
+      type: file
+    - x: 400
+      y: 200
+      type: link
+      path: /Applications
+
+# Notarization requires a "Developer ID Application" certificate and an
+# app-specific password / API key. It is off until those exist — enabling it
+# without them fails the build rather than silently shipping unnotarized.
+# notarize:
+#   teamId: 8529R4A8QV
+
+publish:
+  provider: github
+  owner: lacasera
+  repo: harbor
+  # The repository is private, so electron-updater needs a token with repo
+  # scope at runtime to read the feed. Make the repo public, or host the feed
+  # elsewhere, before relying on auto-update.
+  private: true

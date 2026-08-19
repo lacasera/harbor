@@ -10,6 +10,13 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 
+export interface UpdateStatus {
+  state: 'current' | 'available' | 'disabled' | 'error'
+  currentVersion: string
+  availableVersion?: string
+  detail?: string
+}
+
 export interface TlsStatus {
   installed: boolean
   caInstalled: boolean
@@ -55,6 +62,7 @@ export interface AppSettings {
  */
 export interface IpcContract {
   'app:info': [[], { name: string; version: string; homeDir: string }]
+  'app:checkForUpdates': [[], UpdateStatus]
 
   'services:list': [[], ServiceDescriptor[]]
   'services:install': [[serviceId: string, version: string], void]

@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import type { AppSettings, DnsStatus, NginxStatus, TlsStatus } from '../../../shared/ipc.js'
+import type {
+  AppSettings,
+  DnsStatus,
+  NginxStatus,
+  TlsStatus,
+  UpdateStatus
+} from '../../../shared/ipc.js'
 import { invoke } from '../ipc/client.js'
 import { Toggle } from './primitives.js'
 
@@ -59,6 +65,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const [tld, setTld] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
 
   useEffect(() => {
     void invoke('settings:get').then((s) => {
@@ -246,6 +253,34 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 </span>
               </div>
             </div>
+          </div>
+
+          <div className="card">
+            <div className="section-label">Updates</div>
+            <Step
+              label="Version"
+              hint="Checked on demand, never in the background"
+              ok={update?.state !== 'error'}
+              detail={
+                update
+                  ? update.state === 'available'
+                    ? `${update.currentVersion} → ${update.availableVersion} available`
+                    : update.state === 'current'
+                      ? `${update.currentVersion} — up to date`
+                      : `${update.currentVersion} — ${update.detail ?? update.state}`
+                  : version
+              }
+              action="Check for updates"
+              busy={busy}
+              onRun={() => {
+                setBusy(true)
+                setError(null)
+                void invoke('app:checkForUpdates')
+                  .then(setUpdate)
+                  .catch((e: Error) => setError(e.message))
+                  .finally(() => setBusy(false))
+              }}
+            />
           </div>
 
           <div className="card">

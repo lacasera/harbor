@@ -8,5 +8,17 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- Harbor spawns binaries it manages (nginx, dnsmasq, MinIO, dev servers). -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.inherit</key>
+    <true/>
+    <!-- Reads the user's project directories to park and analyse them. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
   </dict>
 </plist>
