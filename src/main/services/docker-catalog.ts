@@ -167,7 +167,7 @@ export const LOCALSTACK: DockerServiceSpec = {
 export const KAFKA: DockerServiceSpec = {
   id: 'kafka',
   icon: 'stream',
-  tint: '#7A8595',
+  tint: '#231F20',
   displayName: 'Kafka',
   description: 'Distributed event streaming',
   defaultPorts: [9092],

@@ -102,11 +102,15 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   // listening there no matter what the config now says.
   const advice = adviseTld(tld)
 
+  // Defensive on the array: a single missing field should not blank the whole
+  // window, and this pane is the one people open when something is already
+  // wrong.
+  const listening = status?.nginx.listening ?? []
   const boundCorrectly = Boolean(
     status?.nginx.running &&
       settings &&
-      status.nginx.listening.includes(settings.httpPort) &&
-      status.nginx.listening.includes(settings.httpsPort)
+      listening.includes(settings.httpPort) &&
+      listening.includes(settings.httpsPort)
   )
 
   /**
@@ -390,9 +394,9 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                     : !status.nginx.running
                       ? 'stopped'
                       : boundCorrectly
-                        ? `running as ${status.nginx.runningAs} on ${status.nginx.listening.join(', ')}`
+                        ? `running as ${status.nginx.runningAs} on ${listening.join(', ')}`
                         : `running as ${status.nginx.runningAs} on ${
-                            status.nginx.listening.join(', ') || 'nothing'
+                            listening.join(', ') || 'nothing'
                           } — needs :${settings?.httpPort}/:${settings?.httpsPort}`}
                 </span>
                 <button
