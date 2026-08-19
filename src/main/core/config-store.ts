@@ -18,6 +18,9 @@ export interface PersistedState {
     tld: string
     parkedDirs: string[]
     autoStartServices: boolean
+    /** Ports the generated vhosts listen on. 80/443 need a root nginx. */
+    httpPort: number
+    httpsPort: number
   }
 }
 
@@ -28,7 +31,13 @@ const EMPTY: PersistedState = {
   ports: {},
   runtimeDefaults: {},
   runtimeOverrides: {},
-  settings: { tld: 'test', parkedDirs: [], autoStartServices: false }
+  settings: {
+    tld: 'test',
+    parkedDirs: [],
+    autoStartServices: false,
+    httpPort: 80,
+    httpsPort: 443
+  }
 }
 
 /**
@@ -76,10 +85,22 @@ export class ConfigStore extends EventEmitter {
     if (this.writeQueued) return
     this.writeQueued = true
     queueMicrotask(() => {
+      if (!this.writeQueued) return
       this.writeQueued = false
-      const tmp = `${paths.config}.tmp`
-      writeFileSync(tmp, JSON.stringify(this.state, null, 2), 'utf8')
-      renameSync(tmp, paths.config)
+      this.writeNow()
     })
+  }
+
+  /** Write immediately. Called on shutdown so a prompt exit cannot drop a change. */
+  flush(): void {
+    if (!this.writeQueued) return
+    this.writeQueued = false
+    this.writeNow()
+  }
+
+  private writeNow(): void {
+    const tmp = `${paths.config}.tmp`
+    writeFileSync(tmp, JSON.stringify(this.state, null, 2), 'utf8')
+    renameSync(tmp, paths.config)
   }
 }

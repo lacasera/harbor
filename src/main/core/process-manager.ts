@@ -55,7 +55,7 @@ export class ProcessManager extends EventEmitter {
       cwd: req.cwd,
       env,
       // A login shell is not used: commands are resolved to absolute binaries by
-      // the drivers so we never depend on the user's PATH.
+      // the callers (see resolve-binary.ts) so we never depend on the user's PATH.
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe']
     })
@@ -86,6 +86,22 @@ export class ProcessManager extends EventEmitter {
       handle.state = handle.state === 'stopping' || code === 0 ? 'stopped' : 'crashed'
       managed.child = null
       this.emit('changed', { ...handle })
+    })
+
+    // Settle on the first spawn/error so the returned handle reflects reality.
+    // Returning eagerly reported `starting` for a process that had in fact
+    // already failed with ENOENT, and callers had no way to notice.
+    await new Promise<void>((resolve, reject) => {
+      const onSpawn = (): void => {
+        child.off('error', onError)
+        resolve()
+      }
+      const onError = (err: Error): void => {
+        child.off('spawn', onSpawn)
+        reject(new Error(`Failed to start "${req.command}": ${err.message}`))
+      }
+      child.once('spawn', onSpawn)
+      child.once('error', onError)
     })
 
     return { ...handle }

@@ -24,6 +24,9 @@ export interface AppSettings {
   tld: string
   parkedDirs: string[]
   autoStartServices: boolean
+  /** Ports the generated vhosts listen on. 80/443 require a root nginx. */
+  httpPort: number
+  httpsPort: number
 }
 
 /**

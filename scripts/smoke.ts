@@ -19,12 +19,38 @@ import { interpolate, defaultsFor } from '../src/main/services/registry.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
 import { tableize } from '../src/main/intelligence/eloquent-erd.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
+import { resolveBinary } from '../src/main/core/resolve-binary.js'
 import { MinioDriver } from '../src/main/services/minio.js'
 import type { Project } from '../src/shared/project.js'
 
 const checks: Array<[string, () => void | Promise<void>]> = []
 const check = (name: string, fn: () => void | Promise<void>): void => {
   checks.push([name, fn])
+}
+
+/**
+ * Every non-blank line must be a comment, a block open/close, or a directive
+ * ending in ';'. The original tests only regex-matched the whole string, which
+ * happily passed on a config whose entire body had been collapsed into one
+ * comma-separated line.
+ */
+const assertWellFormed = (conf: string): void => {
+  let depth = 0
+  for (const [i, raw] of conf.split('\n').entries()) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    assert.ok(
+      !line.includes(';,') && !/,\s{2,}/.test(line),
+      `line ${i + 1} looks comma-joined: ${line.slice(0, 60)}`
+    )
+    if (line.endsWith('{')) depth++
+    else if (line === '}') depth--
+    else {
+      assert.ok(line.endsWith(';'), `line ${i + 1} is not a directive: ${line.slice(0, 60)}`)
+    }
+    assert.ok(depth >= 0, `unbalanced braces at line ${i + 1}`)
+  }
+  assert.equal(depth, 0, 'unbalanced braces in vhost')
 }
 
 const baseProject = (over: Partial<Project>): Project => ({
@@ -53,6 +79,8 @@ const nginx = new NginxManager(
 
 check('reverse-proxy vhost proxies to the allocated port', () => {
   const conf = nginx.render({ project: baseProject({}), root: '/tmp/api', proxyPort: 3100 })
+  assertWellFormed(conf)
+  assert.match(conf, /^\s{4}listen 80;$/m)
   assert.match(conf, /server_name api\.test;/)
   assert.match(conf, /proxy_pass http:\/\/127\.0\.0\.1:3100;/)
   assert.match(conf, /proxy_set_header Upgrade \$http_upgrade;/)
@@ -66,6 +94,7 @@ check('fpm vhost fastcgi_passes to the pool socket', () => {
     frontController: 'index.php',
     rewrites: [{ location: '/', directives: ['try_files $uri $uri/ /index.php?$query_string;'] }]
   })
+  assertWellFormed(conf)
   assert.match(conf, /root \/tmp\/blog\/public;/)
   assert.match(conf, /fastcgi_pass unix:\/opt\/homebrew\/var\/run\/php83-fpm\.sock;/)
   assert.match(conf, /try_files \$uri \$uri\/ \/index\.php\?\$query_string;/)
@@ -76,8 +105,21 @@ check('static vhost serves files directly', () => {
     project: baseProject({ name: 'docs', domain: 'docs.test', serveModel: 'static' }),
     root: '/tmp/docs/dist'
   })
+  assertWellFormed(conf)
   assert.match(conf, /root \/tmp\/docs\/dist;/)
   assert.doesNotMatch(conf, /proxy_pass|fastcgi_pass/)
+})
+
+check('listen ports are configurable for an unprivileged nginx', () => {
+  const conf = nginx.render({
+    project: baseProject({}),
+    root: '/tmp/api',
+    proxyPort: 3100,
+    httpPort: 8080
+  })
+  assertWellFormed(conf)
+  assert.match(conf, /listen 8080;/)
+  assert.doesNotMatch(conf, /listen 80;/)
 })
 
 check('secured vhost listens on 443 with the mkcert pair', () => {
@@ -87,6 +129,7 @@ check('secured vhost listens on 443 with the mkcert pair', () => {
     proxyPort: 3100,
     cert: { certFile: '/certs/api.test.pem', keyFile: '/certs/api.test-key.pem' }
   })
+  assertWellFormed(conf)
   assert.match(conf, /listen 443 ssl;/)
   assert.match(conf, /ssl_certificate \/certs\/api\.test\.pem;/)
 })
@@ -157,6 +200,18 @@ check('mermaid ERD drops relations to unparsed models', () => {
   ])
   assert.match(diagram, /User \|\|--o\{ Post/)
   assert.doesNotMatch(diagram, /Ghost/)
+})
+
+check('start commands resolve to absolute binaries', () => {
+  // ProcessManager spawns with shell:false, so a bare command must be resolved
+  // or the spawn fails with ENOENT.
+  const found = resolveBinary('sh', [], { PATH: '/usr/bin:/bin' })
+  assert.equal(found, '/bin/sh')
+
+  assert.equal(resolveBinary('definitely-not-a-real-binary', [], { PATH: '/bin' }), null)
+
+  // extraDirs win, so a pinned runtime's toolchain beats whatever is on PATH.
+  assert.equal(resolveBinary('sh', ['/bin'], { PATH: '/usr/bin' }), '/bin/sh')
 })
 
 // ── front door: the one file Harbor edits that it does not own ────────────

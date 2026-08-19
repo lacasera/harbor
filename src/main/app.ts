@@ -91,5 +91,7 @@ export class HarborApp {
     this.processes.stopUsagePolling()
     await this.services.stopAll()
     await this.processes.stopAll()
+    // Persist synchronously: quitting must not drop the last config change.
+    this.store.flush()
   }
 }

@@ -17,6 +17,7 @@ import type { PhpRuntime } from '../runtimes/php.js'
 import type { NativeBackend } from '../backends/native-backend.js'
 import type { PrivilegedHelper } from '../core/privileged-helper.js'
 import { paths } from '../core/paths.js'
+import { binDirOf, resolveBinary } from '../core/resolve-binary.js'
 import { NginxManager, type VhostContext } from './nginx-manager.js'
 import { PhpFrameworkRegistry, createPhpFrameworkRegistry } from './php-frameworks/index.js'
 import { PhpProjectType } from './types/php.js'
@@ -232,7 +233,8 @@ export class ProjectManager extends EventEmitter {
   // ── serving ─────────────────────────────────────────────────────────────
 
   private async writeVhost(project: Project): Promise<void> {
-    const ctx: VhostContext = { project, root: project.path }
+    const { httpPort, httpsPort } = this.deps.store.get().settings
+    const ctx: VhostContext = { project, root: project.path, httpPort, httpsPort }
 
     if (project.serveModel === 'fpm') {
       const framework =
@@ -286,14 +288,23 @@ export class ProjectManager extends EventEmitter {
     }
 
     const resolved = await this.resolveRuntime(project)
-    const [bin, ...args] = command.split(/\s+/)
-    if (!bin) throw new Error(`Empty start command for ${project.name}`)
+    const [rawBin, ...args] = command.split(/\s+/)
+    if (!rawBin) throw new Error(`Empty start command for ${project.name}`)
 
-    // The resolved runtime's bin dir goes on PATH so `npm`/`npx` resolve to our
-    // managed toolchain rather than whatever the user's shell would pick.
+    // The resolved runtime's bin dir goes first, so a project pinned to a
+    // managed toolchain uses that npm rather than whichever is on PATH.
+    const runtimeBins = binDirOf(resolved?.binary ?? null)
     const env: Record<string, string> = {}
-    if (resolved?.binary) {
-      env.PATH = `${join(resolved.binary, '..')}:${process.env.PATH ?? ''}`
+    if (runtimeBins.length) {
+      env.PATH = `${runtimeBins.join(':')}:${process.env.PATH ?? ''}`
+    }
+
+    const bin = resolveBinary(rawBin, runtimeBins, { ...process.env, ...env })
+    if (!bin) {
+      throw new Error(
+        `Cannot find "${rawBin}" for ${project.name}. ` +
+          `Install the runtime it needs, or set an absolute start command in the project settings.`
+      )
     }
 
     const handle = await this.deps.processes.spawn({
@@ -346,8 +357,19 @@ export class ProjectManager extends EventEmitter {
       resolvedStartCommand: await this.resolveStartCommand(project).catch(() => null),
       processId: handle?.id ?? null,
       running: handle?.state === 'running',
-      url: `${project.secure ? 'https' : 'http'}://${project.domain}`
+      url: this.urlFor(project)
     }
+  }
+
+  /** Include the port unless it's the scheme default, so links stay clickable. */
+  private urlFor(project: Project): string {
+    const { httpPort, httpsPort } = this.deps.store.get().settings
+    const scheme = project.secure ? 'https' : 'http'
+    const port = project.secure ? httpsPort : httpPort
+    const suffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80)
+      ? ''
+      : `:${port}`
+    return `${scheme}://${project.domain}${suffix}`
   }
 
   async describeAll(): Promise<ProjectDescriptor[]> {

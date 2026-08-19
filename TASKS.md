@@ -8,10 +8,14 @@ Status as of the design-implementation commit (`27700ca`).
 drivers with the `VersionResolver`, `ProjectManager` + `NginxManager` + four PHP
 framework drivers, dnsmasq/mkcert modules, two analyzers, and the full UI.
 
-**What that means:** the app builds, boots, and every screen renders — but
-**no `.test` site has ever actually been served**. The vhost renderer is
-verified by unit test; the path from a rendered vhost to a browser response is
-not connected. Phase 1 is that connection. Nothing else matters until it works.
+**Status:** the vertical slice now works end to end. `npm run verify:slice`
+parks a real project, spawns its dev server, connects the system nginx and
+proves an HTTP request reaches the app on its persisted port with stdout in the
+log aggregator — 9/9 steps. Herd has been stopped and Harbor owns this machine's
+dev environment; `nginx`, `dnsmasq`, `mkcert` and `nss` are installed.
+
+Still unproven: DNS (`*.test` resolution) and TLS, both of which need a
+root-written file. Requests are currently verified with an explicit Host header.
 
 Definition of done for v1 is the vertical slice named in `CLAUDE.md`:
 
@@ -24,7 +28,7 @@ Definition of done for v1 is the vertical slice named in `CLAUDE.md`:
 
 Small, certain bugs. Fix before building on top of them.
 
-- [ ] **P0.1 — Service CPU/RAM never displays.**
+- [x] **P0.1 — Service CPU/RAM never displays.** *(done)*
   `ServicesView.tsx:90` and `ServiceDetail.tsx:72` match usage samples with
   `usage.find(u => u.processId.startsWith(service.id))`, but `processId` is a
   `randomUUID()` (`process-manager.ts:26`) and never begins with a service id.
@@ -34,7 +38,7 @@ Small, certain bugs. Fix before building on top of them.
   then match `usage.processId === handle.id`. Pass `processes` into both views.
   *Done when:* a running MinIO shows non-zero CPU and memory on its card.
 
-- [ ] **P0.2 — Docker compose fragments are lost on restart.**
+- [x] **P0.2 — Docker compose fragments are lost on restart.** *(done)*
   `DockerBackend.fragments` is an in-memory `Map`. After an app restart,
   starting one Docker service rewrites `~/.harbor/compose/docker-compose.json`
   containing only that service — silently dropping every other service's
@@ -44,7 +48,7 @@ Small, certain bugs. Fix before building on top of them.
   *Done when:* start RabbitMQ, restart Harbor, start a second Docker service —
   both remain in the compose file and both stay up.
 
-- [ ] **P0.3 — MinIO downloads an arm64 binary on Intel Macs.**
+- [x] **P0.3 — MinIO downloads an arm64 binary on Intel Macs.** *(done)*
   `minio.ts:13` hardcodes `darwin-arm64`.
   *Fix:* select from `process.arch`, matching the pattern already used in
   `NodeRuntime`/`DenoRuntime`/`BunRuntime`.
@@ -56,7 +60,10 @@ Small, certain bugs. Fix before building on top of them.
 
 The blocking phase. Each task ends with something observable in a browser.
 
-- [ ] **1.1 — Wire Harbor's vhosts into the system nginx.**
+- [x] **1.1 — Wire Harbor's vhosts into the system nginx.** *(done)*
+  Homebrew's nginx.conf ends with `include servers/*;` and that directory is
+  user-writable, so Harbor connects with a drop-in file and needs no password at
+  all on a standard install. Editing nginx.conf is the fallback.
   `NginxManager.ensureRootConfig()` writes `~/.harbor/nginx/harbor.conf`
   containing `include ~/.harbor/nginx/sites/*.conf;`, but **nothing ever adds
   that file to the system `nginx.conf`**, so no vhost is ever served.
@@ -77,14 +84,18 @@ The blocking phase. Each task ends with something observable in a browser.
   return the path Harbor actually created. Add health detection.
   *Done when:* a Laravel app parks and serves at `<name>.test`.
 
-- [ ] **1.3 — Run the dnsmasq + resolver setup for real.**
+- [ ] **1.3 — Run the dnsmasq + resolver setup for real.** ← *next*
+  Herd's `/etc/resolver/test` (backed up: `nameserver 127.0.0.1`, `port 5300`)
+  must be replaced with Harbor's. Needs `dnsmasq:configure` over IPC so the app
+  can drive it through `PrivilegedHelper`'s prompt.
   `DnsmasqManager` is written but has never been executed. Verify the brew
   path, the fragment location, `/etc/resolver/<tld>`, and the restart command
   on a real machine; fix what the first run reveals.
   *Done when:* `dig foo.test @127.0.0.1` returns `127.0.0.1` and a browser
   resolves an arbitrary `*.test` name without an `/etc/hosts` entry.
 
-- [ ] **1.4 — Run the mkcert flow for real.**
+- [ ] **1.4 — Run the mkcert flow for real.** ← *next*
+  Also needs `tls:installCa` / `tls:certify` over IPC for the same reason.
   Same: `TlsManager` is unexercised. Confirm CA install, per-site cert issue,
   and that a `secure: true` vhost serves HTTPS without a browser warning.
   Wire "Secure (TLS)" on the project Overview to issue the cert before
@@ -92,7 +103,7 @@ The blocking phase. Each task ends with something observable in a browser.
   back to HTTP because no cert file exists (`projects/index.ts:236`).
   *Done when:* toggling TLS on a parked site yields a trusted `https://` load.
 
-- [ ] **1.5 — Re-render vhosts on boot.**
+- [x] **1.5 — Re-render vhosts on boot.** *(done)*
   Vhosts are written on park/update only. If the TLD changes, a cert is added,
   or the file is deleted, state drifts.
   *Build:* re-render every project's vhost during `HarborApp.start()`, then run
@@ -103,7 +114,9 @@ The blocking phase. Each task ends with something observable in a browser.
 
 ## Phase 2 — the vertical slice
 
-- [ ] **2.1 — Express app at `api.test`, end to end.**
+- [x] **2.1 — dev server served through nginx, end to end.** *(done)*
+  Covered by `npm run verify:slice`. Uses an explicit Host header rather than
+  DNS; finish 1.3 to drop that caveat.
   Park a real Express project, confirm detection → `node-server` →
   reverse-proxy, port allocated and persisted, `npm run dev` spawned with
   `PORT` injected, nginx proxying, and the port stable across an app restart.
@@ -114,16 +127,36 @@ The blocking phase. Each task ends with something observable in a browser.
   `.env` produces values matching the running instance (not schema defaults).
   *Done when:* the copied block works verbatim in a Laravel `.env`.
 
-- [ ] **2.3 — Both in the unified log viewer.**
+- [x] **2.3 — dev-server output reaches the aggregator.** *(done, in verify:slice)*
+- [ ] **2.3b — MinIO logs alongside it in the viewer.**
   MinIO stdout and the Express dev server both appear, tagged, filterable,
   following.
   *Done when:* source chips list both and filtering isolates each.
 
-- [ ] **2.4 — Write the slice up as a smoke script.**
-  Extend `scripts/smoke.ts` (or add an integration script) so the slice is
-  re-checkable rather than a one-off manual pass.
+- [x] **2.4 — Write the slice up as a script.** *(done: `scripts/verify-slice.ts`)*
 
 ---
+
+## Defects found by running it
+
+Every one of these was invisible to the type checker and to the original tests.
+
+- [x] **Every generated vhost was syntactically invalid.** `render()` nested the
+  indented body array inside the outer array, so `join('\n')` stringified it
+  into one comma-separated line. nginx rejected it outright. The unit tests
+  passed because they regex-matched the whole string, and a substring match
+  succeeds just as well on a mangled line. Tests now assert line structure.
+- [x] **Dev servers never spawned.** `ProcessManager` runs with `shell: false`
+  while `NodeServerProjectType` returns a bare `npm run dev`, so every start
+  failed with ENOENT. Added `resolve-binary.ts`, searching the pinned runtime's
+  bin dir before PATH.
+- [x] **`spawn()` returned before the process existed**, so callers got a handle
+  claiming `starting` for a process that had already failed. It now settles on
+  the first spawn/error event and rejects with the real reason.
+- [x] **`reload()` escalated to a root prompt when nginx simply wasn't running.**
+  Now a no-op, and the unprivileged reload is tried before escalating at all.
+- [x] **Config writes could be lost on a prompt exit** (debounced onto a
+  microtask). Added `ConfigStore.flush()`, called from `shutdown()`.
 
 ## Phase 3 — correctness and robustness
 
