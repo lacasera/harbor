@@ -534,6 +534,14 @@ export class ProjectManager extends EventEmitter {
     if (!this.nginx.isConnected()) {
       return { served: false, by: null, problem: "nginx isn't reading Harbor's vhosts" }
     }
+    if (await this.nginx.workersCannotReadProjects()) {
+      return {
+        served: false,
+        by: null,
+        problem:
+          'nginx workers run as "nobody" and cannot read your projects — restart nginx from Settings'
+      }
+    }
 
     if (project.serveModel === 'static') {
       return { served: true, by: 'nginx · static files', problem: null }

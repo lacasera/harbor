@@ -184,7 +184,8 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('nginx:status', () => harbor.projects.nginx.status())
   handle('nginx:reload', () => harbor.projects.nginx.reload())
   handle('nginx:connect', async () => {
-    await harbor.projects.nginx.connect()
+    const { httpPort, httpsPort } = harbor.store.get().settings
+    await harbor.projects.nginx.connect({ httpPort, httpsPort })
     return harbor.projects.nginx.status()
   })
   handle('nginx:restart', async () => {

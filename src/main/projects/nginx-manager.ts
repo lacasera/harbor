@@ -267,8 +267,15 @@ export class NginxManager {
   }
 
   /** Add the include and reload. Only prompts for root on the fallback path. */
-  async connect(): Promise<void> {
+  async connect(ports?: { httpPort: number; httpsPort: number }): Promise<void> {
     this.ensureRootConfig()
+
+    // Connecting is when Harbor takes responsibility for serving these sites,
+    // so set the worker user here too. Doing it only in start() left an
+    // already-running root master permanently broken.
+    if (ports && this.needsRoot([ports.httpPort, ports.httpsPort])) {
+      await this.ensureWorkerUser().catch(() => undefined)
+    }
 
     const dropIn = this.dropInPath()
     if (dropIn) {
@@ -380,10 +387,50 @@ export class NginxManager {
   /**
    * A running master holds the listeners it was started with; a reload will not
    * move it from :8080 to :80. Changing ports means a full restart.
+   *
+   * When root is required, the config edit, the stop and the start go out as a
+   * single elevated script. Done separately they are three password prompts for
+   * one click, and a user who cancels the second is left with nginx down.
    */
   async restart(ports: { httpPort: number; httpsPort: number }): Promise<void> {
-    await this.stop()
-    await this.start(ports)
+    const binary = this.native.which('nginx')
+    if (!binary) throw new Error('nginx is not installed — install it with: brew install nginx')
+
+    if (!this.needsRoot([ports.httpPort, ports.httpsPort])) {
+      await this.stop()
+      await this.start(ports)
+      return
+    }
+
+    const config = this.systemConfigPath()
+    const steps: string[] = []
+
+    // Stage the worker-user edit unprivileged; the elevated script only copies.
+    if (config) {
+      const { username } = userInfo()
+      const next = setWorkerUser(readFileSync(config, 'utf8'), username, 'staff')
+      if (next !== null) {
+        const staged = join(paths.nginx, 'nginx.conf.worker')
+        writeFileSync(staged, next, 'utf8')
+        steps.push(
+          `cp -n '${config}' '${this.backupPath()}' 2>/dev/null || true`,
+          `cp '${staged}' '${config}'`,
+          // Validate as root, and put the original back rather than leaving
+          // nginx unable to start.
+          `if ! '${binary}' -t; then cp '${this.backupPath()}' '${config}'; exit 1; fi`
+        )
+      }
+    }
+
+    steps.push(
+      `'${binary}' -s stop 2>/dev/null || true`,
+      'sleep 1',
+      `'${binary}'`
+    )
+
+    await this.privileged.run(steps.join('\n'))
+    rmSync(join(paths.nginx, 'nginx.conf.worker'), { force: true })
+    this.runningCache = null
   }
 
   /**
@@ -413,6 +460,18 @@ export class NginxManager {
     writeFileSync(staged, next, 'utf8')
     await this.privileged.installFile(staged, config)
     rmSync(staged, { force: true })
+  }
+
+  /**
+   * True when nginx is running as root with no `user` directive, so its
+   * workers are `nobody` and cannot read anything under /Users. Every site
+   * then 403s on its docroot and 502s on its pool, with Harbor's own
+   * configuration entirely correct — worth naming rather than leaving in a log.
+   */
+  async workersCannotReadProjects(): Promise<boolean> {
+    if ((await this.masterUser()) !== 'root') return false
+    const worker = this.workerUser()
+    return worker === null || worker === 'nobody'
   }
 
   workerUser(): string | null {

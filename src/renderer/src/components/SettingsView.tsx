@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/ipc.js'
 import { invoke } from '../ipc/client.js'
 import { Toggle } from './primitives.js'
+import { adviseTld } from '../../../shared/tld.js'
 
 interface SystemStatus {
   nginx: NginxStatus
@@ -92,6 +93,8 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
 
   // "Running" is not the same as "serving": a master started on 8080 keeps
   // listening there no matter what the config now says.
+  const advice = adviseTld(tld)
+
   const boundCorrectly = Boolean(
     status?.nginx.running &&
       settings &&
@@ -176,6 +179,24 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                     ? 'every site is re-homed on change'
                     : `re-homes every site to .${tld}`}
                 </span>
+              </div>
+            </div>
+
+            <div className="row">
+              <div className="k" />
+              <div
+                className="v small"
+                style={{
+                  color:
+                    advice.level === 'danger'
+                      ? 'var(--rd)'
+                      : advice.level === 'warn'
+                        ? 'var(--am)'
+                        : 'var(--tx3)',
+                  textWrap: 'pretty'
+                }}
+              >
+                {advice.message}
               </div>
             </div>
 
@@ -370,6 +391,17 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 </button>
               </div>
             </div>
+            {status?.nginx.runningAs === 'root' &&
+              (!status.nginx.workerUser || status.nginx.workerUser === 'nobody') && (
+                <div className="row">
+                  <div className="k" />
+                  <div className="v small" style={{ color: 'var(--rd)', textWrap: 'pretty' }}>
+                    nginx workers are running as <span className="mono">nobody</span>, which cannot
+                    read anything under your home directory — every site will return 403 or 502.
+                    Restart nginx to fix it.
+                  </div>
+                </div>
+              )}
             {status?.nginx.running && !boundCorrectly && (
               <div className="row">
                 <div className="k" />

@@ -24,6 +24,7 @@ import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
 import { quoteForAppleScript } from '../src/main/core/privileged-helper.js'
+import { adviseTld } from '../src/shared/tld.js'
 import { MinioDriver } from '../src/main/services/minio.js'
 import type { Project } from '../src/shared/project.js'
 
@@ -429,6 +430,25 @@ check('mermaid ERD drops relations to unparsed models', () => {
   ])
   assert.match(diagram, /User \|\|--o\{ Post/)
   assert.doesNotMatch(diagram, /Ghost/)
+})
+
+check('real public TLDs are flagged before they are adopted', () => {
+  // Harbor points a whole suffix at 127.0.0.1; choosing a real one makes every
+  // genuine site under it unreachable from the machine.
+  assert.equal(adviseTld('test').level, 'ok')
+  assert.equal(adviseTld('.test').level, 'ok')
+  assert.equal(adviseTld('localhost').level, 'ok')
+
+  // .app and .dev are HSTS-preloaded, which is worse than merely colliding.
+  assert.equal(adviseTld('app').level, 'danger')
+  assert.match(adviseTld('app').message, /HSTS/)
+  assert.equal(adviseTld('dev').level, 'danger')
+  assert.equal(adviseTld('local').level, 'danger')
+
+  // Unregistered suffixes work but carry a caveat.
+  assert.equal(adviseTld('harbor').level, 'warn')
+  assert.equal(adviseTld('').level, 'danger')
+  assert.equal(adviseTld('not valid!').level, 'danger')
 })
 
 check('privileged commands are escaped for AppleScript', () => {
