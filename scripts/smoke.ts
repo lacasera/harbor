@@ -15,7 +15,7 @@ import {
   removeHarborInclude
 } from '../src/main/projects/nginx-manager.js'
 import { createPhpFrameworkRegistry } from '../src/main/projects/php-frameworks/index.js'
-import { interpolate, defaultsFor } from '../src/main/services/registry.js'
+import { interpolate, defaultsFor, validate } from '../src/main/services/registry.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
 import { tableize } from '../src/main/intelligence/eloquent-erd.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
@@ -194,6 +194,26 @@ check('env hints interpolate against live config, not schema defaults', () => {
   const scope = { ...defaultsFor(minio.configSchema), host: '127.0.0.1', port: 9555 }
   assert.equal(interpolate(minio.envHints.AWS_ENDPOINT as string, scope), 'http://127.0.0.1:9555')
   assert.equal(interpolate(minio.envHints.AWS_ACCESS_KEY_ID as string, scope), 'minioadmin')
+})
+
+check('config is validated against the driver schema', () => {
+  const minio = new MinioDriver({} as never, {} as never)
+  const good = defaultsFor(minio.configSchema)
+  assert.deepEqual(validate(minio.configSchema, good), [])
+
+  // Out-of-range port: the schema's own minimum is the rule, not a hand-written check.
+  const badPort = validate(minio.configSchema, { ...good, port: 80 })
+  assert.equal(badPort.length, 1)
+  assert.equal(badPort[0]?.field, 'port')
+
+  // A missing required field is reported against that field, not the object.
+  const { rootUser: _omitted, ...missing } = good
+  const required = validate(minio.configSchema, missing)
+  assert.ok(required.some((e) => e.field === 'rootUser' && e.message === 'is required'))
+
+  // Too-short password trips minLength.
+  const short = validate(minio.configSchema, { ...good, rootPassword: 'abc' })
+  assert.ok(short.some((e) => e.field === 'rootPassword'))
 })
 
 check('version matching resolves ranges to installed builds', () => {

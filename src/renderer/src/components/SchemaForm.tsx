@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { JSONSchema } from '../../../shared/json-schema.js'
+import type { FieldError } from '../../../shared/service.js'
 import { Toggle } from './primitives.js'
 
 /**
@@ -39,6 +40,7 @@ function specsFor(schema: JSONSchema): FieldSpec[] {
 export function SchemaForm({
   schema,
   values,
+  errors = [],
   onSave,
   onReset,
   busy,
@@ -46,6 +48,8 @@ export function SchemaForm({
 }: {
   schema: JSONSchema
   values: Record<string, unknown>
+  /** Validation failures from the last save, addressed per field. */
+  errors?: FieldError[]
   onSave: (values: Record<string, unknown>) => void
   onReset: () => void
   busy?: boolean
@@ -75,6 +79,8 @@ export function SchemaForm({
   )
 
   const set = (key: string, value: unknown): void => setDraft((d) => ({ ...d, [key]: value }))
+  const errorFor = (key: string): string | null =>
+    errors.find((e) => e.field === key)?.message ?? null
 
   return (
     <div className="stack">
@@ -106,14 +112,22 @@ export function SchemaForm({
                 </div>
                 {field.description && <div className="hint">{field.description}</div>}
               </div>
-              <div className="v">
-                <Control
-                  field={field}
-                  value={draft[field.key]}
-                  revealed={Boolean(revealed[field.key])}
-                  onReveal={() => setRevealed((r) => ({ ...r, [field.key]: !r[field.key] }))}
-                  onChange={(v) => set(field.key, v)}
-                />
+              <div>
+                <div className="v">
+                  <Control
+                    field={field}
+                    value={draft[field.key]}
+                    invalid={Boolean(errorFor(field.key))}
+                    revealed={Boolean(revealed[field.key])}
+                    onReveal={() => setRevealed((r) => ({ ...r, [field.key]: !r[field.key] }))}
+                    onChange={(v) => set(field.key, v)}
+                  />
+                </div>
+                {errorFor(field.key) && (
+                  <div className="field-error">
+                    {field.label} {errorFor(field.key)}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -140,11 +154,18 @@ export function SchemaForm({
         >
           Reset to defaults
         </button>
-        {dirty && (
-          <span className="banner">
-            <span className="dot sm" style={{ background: 'var(--am)' }} />
-            unsaved changes — restart required
+        {errors.length > 0 ? (
+          <span className="banner" style={{ color: 'var(--rd)' }}>
+            <span className="dot sm" style={{ background: 'var(--rd)' }} />
+            {errors.length} field{errors.length > 1 ? 's' : ''} need attention
           </span>
+        ) : (
+          dirty && (
+            <span className="banner">
+              <span className="dot sm" style={{ background: 'var(--am)' }} />
+              unsaved changes — restart required
+            </span>
+          )
         )}
       </div>
     </div>
@@ -154,12 +175,14 @@ export function SchemaForm({
 function Control({
   field,
   value,
+  invalid,
   revealed,
   onReveal,
   onChange
 }: {
   field: FieldSpec
   value: unknown
+  invalid: boolean
   revealed: boolean
   onReveal: () => void
   onChange: (value: unknown) => void
@@ -210,7 +233,7 @@ function Control({
   return (
     <>
       <input
-        className={`field-input ${pathLike ? 'mono' : ''}`}
+        className={`field-input ${pathLike ? 'mono' : ''} ${invalid ? 'invalid' : ''}`}
         style={{ width: numeric ? 110 : pathLike ? 400 : 280, maxWidth: '100%' }}
         type={numeric ? 'number' : 'text'}
         value={String(value ?? '')}

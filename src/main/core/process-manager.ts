@@ -124,13 +124,19 @@ export class ProcessManager extends EventEmitter {
     return [...this.processes.values()].map((m) => ({ ...m.handle }))
   }
 
-  findByOwner(kind: string, ownerId: string): ProcessHandle | null {
+  /**
+   * The owner's live process. `includeDead` also returns a handle whose child
+   * has exited, which is what lets callers distinguish "never started" from
+   * "started and crashed".
+   */
+  findByOwner(kind: string, ownerId: string, includeDead = false): ProcessHandle | null {
+    let dead: ProcessHandle | null = null
     for (const m of this.processes.values()) {
-      if (m.handle.owner.kind === kind && m.handle.owner.id === ownerId && m.child) {
-        return { ...m.handle }
-      }
+      if (m.handle.owner.kind !== kind || m.handle.owner.id !== ownerId) continue
+      if (m.child) return { ...m.handle }
+      if (includeDead) dead = { ...m.handle }
     }
-    return null
+    return dead
   }
 
   /** SIGTERM, then SIGKILL after `graceMs`. */

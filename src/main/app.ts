@@ -47,7 +47,7 @@ export class HarborApp {
     this.native = new NativeBackend(this.processes)
     this.docker = new DockerBackend(this.processes)
 
-    this.services = new ServiceRegistry(this.store, this.logs)
+    this.services = new ServiceRegistry(this.store, this.logs, this.processes)
     registerServices(this.services, {
       native: this.native,
       docker: this.docker,
@@ -77,6 +77,7 @@ export class HarborApp {
 
   async start(): Promise<void> {
     this.processes.startUsagePolling()
+    this.services.startHealthPolling()
     this.projects.nginx.ensureRootConfig()
 
     // Vhosts are otherwise only written on park/update, so a deleted file, a
@@ -91,6 +92,7 @@ export class HarborApp {
 
   async shutdown(): Promise<void> {
     this.processes.stopUsagePolling()
+    this.services.stopHealthPolling()
     await this.services.stopAll()
     await this.processes.stopAll()
     // Persist synchronously: quitting must not drop the last config change.

@@ -132,13 +132,13 @@ The blocking phase. Each task ends with something observable in a browser.
   `PORT` injected, nginx proxying, and the port stable across an app restart.
   *Done when:* `curl http://api.test` returns the app, twice, across a restart.
 
-- [ ] **2.2 — MinIO end to end.**
+- [x] **2.2 — MinIO end to end.** *(done: `npm run verify:service`)*
   Install through the UI, start, health goes green, real ports bound, Copy
   `.env` produces values matching the running instance (not schema defaults).
   *Done when:* the copied block works verbatim in a Laravel `.env`.
 
 - [x] **2.3 — dev-server output reaches the aggregator.** *(done, in verify:slice)*
-- [ ] **2.3b — MinIO logs alongside it in the viewer.**
+- [x] **2.3b — MinIO logs alongside it in the viewer.** *(done)*
   MinIO stdout and the Express dev server both appear, tagged, filterable,
   following.
   *Done when:* source chips list both and filtering isolates each.
@@ -181,18 +181,18 @@ Every one of these was invisible to the type checker and to the original tests.
 
 ## Phase 3 — correctness and robustness
 
-- [ ] **3.1 — Service lifecycle on quit/crash.** Verify children die with the
+- [x] **3.1 — Service lifecycle on quit/crash.** *(done)* Verify children die with the
   app (`before-quit` → `shutdown`), and that a crashed service reports
   `crashed` rather than silently showing stopped.
-- [ ] **3.2 — Port conflicts.** Allocator skips a port held by a foreign
+- [x] **3.2 — Port conflicts.** *(done)* Allocator skips a port held by a foreign
   process, and surfaces a clear error when the range is exhausted.
-- [ ] **3.3 — Health-check cost.** `ServiceRegistry.describe()` health-checks on
+- [x] **3.3 — Health-check cost.** *(done)* `ServiceRegistry.describe()` health-checks on
   every call; `services:list` runs on every UI mount. Cache briefly or make the
   UI subscribe rather than re-list.
-- [ ] **3.4 — Config validation.** `ajv` is a dependency but unused. Validate
+- [x] **3.4 — Config validation.** *(done)* `ajv` is a dependency but unused. Validate
   `values` against `configSchema` in `updateConfig` and return field errors the
   form can display.
-- [ ] **3.5 — Error surfacing.** Driver failures (install, start) currently
+- [x] **3.5 — Error surfacing.** *(done)* Driver failures (install, start) currently
   reach the UI as raw `Error.message`. Decide on a consistent shape.
 
 ---

@@ -1370,3 +1370,13 @@
   font-size: 11.5px;
   color: var(--am);
 }
+
+.field-input.invalid,
+.field-select.invalid {
+  border-color: var(--rd);
+}
+.field-error {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--rd);
+}

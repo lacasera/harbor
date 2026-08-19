@@ -18,9 +18,20 @@ export class PortAllocator {
     return this.store.get().ports[key] ?? null
   }
 
+  /**
+   * Returns the persisted assignment when it is still usable. A stored port can
+   * be stolen while Harbor is closed — by a manually started dev server, or by
+   * another tool — and handing it back would produce an nginx vhost pointing at
+   * someone else's process. Callers re-render the vhost when the port changes.
+   */
   async allocate(key: string, preferred?: number): Promise<number> {
     const existing = this.store.get().ports[key]
-    if (existing) return existing
+    if (existing) {
+      if (await isFree(existing)) return existing
+      this.store.update((s) => {
+        delete s.ports[key]
+      })
+    }
 
     const taken = new Set(Object.values(this.store.get().ports))
     const candidates: number[] = []
@@ -37,7 +48,10 @@ export class PortAllocator {
         return port
       }
     }
-    throw new Error(`No free port available in ${RANGE_START}-${RANGE_END}`)
+    throw new Error(
+      `No free port available in ${RANGE_START}-${RANGE_END}. ` +
+        `Stop something using that range, or free the ports Harbor has already assigned.`
+    )
   }
 
   release(key: string): void {

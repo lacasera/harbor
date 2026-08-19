@@ -1,4 +1,9 @@
-import type { EnvBlock, ServiceConfig, ServiceDescriptor } from './service.js'
+import type {
+  ConfigUpdateResult,
+  EnvBlock,
+  ServiceConfig,
+  ServiceDescriptor
+} from './service.js'
 import type { RuntimeDescriptor, ResolvedVersion, RuntimeId } from './runtime.js'
 import type { ProjectDescriptor, ProjectTypeId } from './project.js'
 import type { ProcessHandle, ResourceUsage } from './process.js'
@@ -55,7 +60,10 @@ export interface IpcContract {
   'services:install': [[serviceId: string, version: string], void]
   'services:start': [[serviceId: string], ServiceDescriptor]
   'services:stop': [[serviceId: string], ServiceDescriptor]
-  'services:updateConfig': [[serviceId: string, config: Partial<ServiceConfig>], ServiceDescriptor]
+  'services:updateConfig': [
+    [serviceId: string, config: Partial<ServiceConfig>],
+    ConfigUpdateResult
+  ]
   'services:envBlock': [[serviceId: string], EnvBlock]
   'services:envBlocks': [[serviceIds: string[]], EnvBlock[]]
 

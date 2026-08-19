@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { EnvBlock as EnvBlockData, ServiceDescriptor } from '../../../shared/service.js'
+import type {
+  EnvBlock as EnvBlockData,
+  FieldError,
+  ServiceDescriptor
+} from '../../../shared/service.js'
 import type { LogLine } from '../../../shared/logs.js'
 import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import type { ServiceTab } from '../routes.js'
@@ -42,6 +46,7 @@ export function ServiceDetail({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [block, setBlock] = useState<EnvBlockData | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<FieldError[]>([])
   const { copied, copy } = useCopy()
   const monograms = useMemo(
     () => monogramsFor(catalogue.map((s) => s.displayName)),
@@ -57,6 +62,25 @@ export function ServiceDetail({
       cancelled = true
     }
   }, [service.id, service.status.health, service.config])
+
+  /** Validation failure is an expected result here, not an exception. */
+  const saveConfig = async (values: Record<string, unknown>): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await invoke('services:updateConfig', service.id, { values })
+      if (result.ok) {
+        setFieldErrors([])
+        onChanged(result.service)
+      } else {
+        setFieldErrors(result.errors)
+      }
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const run = async (fn: () => Promise<ServiceDescriptor>): Promise<void> => {
     setBusy(true)
@@ -173,13 +197,10 @@ export function ServiceDetail({
             <SchemaForm
               schema={service.configSchema}
               values={service.config.values}
+              errors={fieldErrors}
               busy={busy}
-              onSave={(values) =>
-                void run(() => invoke('services:updateConfig', service.id, { values }))
-              }
-              onReset={() =>
-                void run(() => invoke('services:updateConfig', service.id, { values: {} }))
-              }
+              onSave={(values) => void saveConfig(values)}
+              onReset={() => void saveConfig({})}
             />
 
             <div className="stack">

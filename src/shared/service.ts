@@ -71,6 +71,21 @@ export interface ServiceDescriptor {
   status: ServiceStatus
 }
 
+/** One schema violation, addressed to the field that caused it. */
+export interface FieldError {
+  /** Property name, or '' for an error about the object as a whole. */
+  field: string
+  message: string
+}
+
+/**
+ * Config updates can fail validation, which is an expected outcome rather than
+ * an exception — the form needs to render the errors next to their fields.
+ */
+export type ConfigUpdateResult =
+  | { ok: true; service: ServiceDescriptor }
+  | { ok: false; errors: FieldError[] }
+
 export interface EnvBlock {
   serviceId: string
   displayName: string

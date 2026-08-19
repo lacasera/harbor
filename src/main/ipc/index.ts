@@ -11,16 +11,31 @@ import type { HarborApp } from '../app.js'
 import { HARBOR_HOME } from '../core/paths.js'
 
 /** Typed `handle` — the channel name pins both the args and the return type. */
-function handle<C extends IpcChannel>(
+function makeHandle(
+  onError: (channel: string, message: string) => void
+): <C extends IpcChannel>(
   channel: C,
   fn: (...args: IpcArgs<C>) => Promise<IpcResult<C>> | IpcResult<C>
-): void {
-  ipcMain.handle(channel, async (_event, ...args: unknown[]) =>
-    fn(...(args as IpcArgs<C>))
-  )
+) => void {
+  return (channel, fn) => {
+    ipcMain.handle(channel, async (_event, ...args) => {
+      try {
+        return await fn(...(args as IpcArgs<typeof channel>))
+      } catch (err) {
+        // Surface it in the log viewer as well as rejecting: a failure the user
+        // dismissed should still be findable afterwards.
+        onError(channel, (err as Error).message)
+        throw err
+      }
+    })
+  }
 }
 
 export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | null): void {
+  const handle = makeHandle((channel, message) => {
+    harbor.logs.push('harbor', 'ipc', `${channel} failed: ${message}`)
+  })
+
   const send = <E extends IpcEventName>(event: E, payload: IpcEvents[E]): void => {
     getWindow()?.webContents.send(event, payload)
   }
