@@ -120,11 +120,35 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
 
   // ── settings & system ───────────────────────────────────────────────────
   handle('settings:get', () => ({ ...harbor.store.get().settings }))
-  handle('settings:update', (patch) => {
+  handle('settings:update', async (patch) => {
+    const before = { ...harbor.store.get().settings }
     harbor.store.update((s) => {
       Object.assign(s.settings, patch)
     })
-    return { ...harbor.store.get().settings }
+    const after = harbor.store.get().settings
+
+    // Settings that other state is derived from have to propagate, or the
+    // control silently does nothing.
+    if (patch.tld && after.tld !== before.tld) {
+      const result = await harbor.projects.changeTld(after.tld)
+      harbor.logs.push(
+        'harbor',
+        'settings',
+        `TLD ${before.tld} → ${after.tld}: ${result.renamed.length} site(s) re-homed` +
+          (result.failed.length ? `, ${result.failed.length} failed` : '')
+      )
+      // dnsmasq answers for one TLD; restart it on the new one.
+      await harbor.dns.start(after.tld).catch(() => undefined)
+    }
+
+    if (
+      (patch.httpPort && after.httpPort !== before.httpPort) ||
+      (patch.httpsPort && after.httpsPort !== before.httpsPort)
+    ) {
+      await harbor.projects.rewriteAllVhosts().catch(() => undefined)
+    }
+
+    return { ...after }
   })
   const tld = (): string => harbor.store.get().settings.tld
 

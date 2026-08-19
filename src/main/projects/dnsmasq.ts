@@ -95,7 +95,13 @@ export class DnsmasqManager {
     // A spawned process is not yet a listening one. Returning before the
     // socket is bound makes the very next query fail for no real reason.
     if (!(await this.waitUntilResolving(tld))) {
-      throw new Error(`dnsmasq started but did not answer for *.${tld}`)
+      // Almost always something else already on the port — most often a
+      // dnsmasq orphaned by a previous Harbor that was force-quit.
+      const holder = await this.portHolder()
+      throw new Error(
+        `dnsmasq did not answer for *.${tld}` +
+          (holder ? ` — port ${this.port} is held by ${holder}` : '')
+      )
     }
   }
 
@@ -128,6 +134,22 @@ export class DnsmasqManager {
 
   async removeResolver(tld: string): Promise<void> {
     await this.privileged.removeFile(this.resolverPath(tld))
+  }
+
+  /** What already occupies our port, for a failure message worth reading. */
+  private async portHolder(): Promise<string | null> {
+    try {
+      const { stdout } = await execFile('/usr/sbin/lsof', [
+        '-nP',
+        `-iUDP:${this.port}`,
+        '-Fcp'
+      ])
+      const pid = /^p(\d+)/m.exec(stdout)?.[1]
+      const command = /^c(.+)$/m.exec(stdout)?.[1]
+      return pid && command ? `${command} (pid ${pid})` : null
+    } catch {
+      return null
+    }
   }
 
   /** Ask our own dnsmasq directly — proves the config without needing /etc. */

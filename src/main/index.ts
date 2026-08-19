@@ -51,6 +51,19 @@ void app.whenReady().then(async () => {
   })
 })
 
+// A signalled app must still take its daemons down, or they orphan and hold
+// their ports against the next launch.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+  process.on(signal, () => {
+    void (async () => {
+      const instance = harbor
+      harbor = null
+      await instance?.shutdown().catch(() => undefined)
+      app.exit(0)
+    })()
+  })
+}
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

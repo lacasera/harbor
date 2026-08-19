@@ -52,7 +52,7 @@ export function ProjectsView({
     }
   }
 
-  const running = projects.filter((p) => p.running).length
+  const running = projects.filter((p) => p.served).length
   const roots = parkedDirs.length ? parkedDirs.join(', ') : 'no parked directories'
 
   return (
@@ -61,7 +61,7 @@ export function ProjectsView({
         <div>
           <div className="page-title">Projects</div>
           <div className="page-sub">
-            {projects.length} parked · {running} running · {roots}
+            {projects.length} parked · {running} serving · {roots}
           </div>
         </div>
         <div className="hstack">
@@ -118,7 +118,7 @@ export function ProjectsView({
               >
                 <div style={{ minWidth: 0 }}>
                   <div className="name">
-                    <StatusDot status={project.running ? 'running' : 'stopped'} />
+                    <StatusDot status={project.served ? 'running' : 'stopped'} />
                     <span>{project.name}</span>
                   </div>
                   <div className="path">{project.path}</div>

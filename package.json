@@ -21,7 +21,8 @@
     "verify:catalog": "esbuild scripts/verify-catalog.ts --bundle --platform=node --format=cjs --external:electron --external:sudo-prompt --outfile=node_modules/.cache/verify-catalog.cjs --log-level=warning && node node_modules/.cache/verify-catalog.cjs",
     "verify:intelligence": "esbuild scripts/verify-intelligence.ts --bundle --platform=node --format=cjs --external:electron --external:sudo-prompt --outfile=node_modules/.cache/verify-intelligence.cjs --log-level=warning && node node_modules/.cache/verify-intelligence.cjs",
     "doctor:release": "esbuild scripts/check-release.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/check-release.cjs --log-level=warning && node node_modules/.cache/check-release.cjs",
-    "icon": "python3 scripts/make-icon.py"
+    "icon": "python3 scripts/make-icon.py",
+    "verify:php": "esbuild scripts/verify-php-site.ts --bundle --platform=node --format=cjs --external:electron --external:sudo-prompt --outfile=node_modules/.cache/verify-php-site.cjs --log-level=warning && node node_modules/.cache/verify-php-site.cjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",

@@ -104,7 +104,7 @@ export function App(): React.JSX.Element {
     [follow]
   )
 
-  const runningProjects = projects.filter((p) => p.running)
+  const runningProjects = projects.filter((p) => p.served)
   const runningServices = services.filter((s) => s.status.health === 'running')
 
   const running: RunningEntry[] = useMemo(

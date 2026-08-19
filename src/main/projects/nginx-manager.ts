@@ -34,6 +34,8 @@ export interface VhostContext {
  * one file; there are no per-project-type nginx branches anywhere else.
  */
 export class NginxManager {
+  private runningCache: { value: boolean; at: number } | null = null
+
   constructor(
     private readonly native: NativeBackend,
     private readonly privileged: PrivilegedHelper
@@ -452,6 +454,21 @@ export class NginxManager {
     } catch {
       await this.privileged.run(`${binary} -s reload`)
     }
+  }
+
+  /**
+   * Whether a master is up, cached briefly. describe() asks this for every
+   * project on every list, and shelling out to pgrep each time is wasteful.
+   */
+  async isRunningCached(ttlMs = 3000): Promise<boolean> {
+    if (this.runningCache && Date.now() - this.runningCache.at < ttlMs) {
+      return this.runningCache.value
+    }
+    const value = await exec('/usr/bin/pgrep -x nginx')
+      .then(() => true)
+      .catch(() => false)
+    this.runningCache = { value, at: Date.now() }
+    return value
   }
 
   /** What the running master is bound to, which may differ from the config. */

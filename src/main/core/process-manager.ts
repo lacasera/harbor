@@ -164,6 +164,45 @@ export class ProcessManager extends EventEmitter {
     await Promise.all([...this.processes.keys()].map((id) => this.stop(id, 2000)))
   }
 
+  /**
+   * Kill processes left behind by a previous Harbor that did not shut down
+   * cleanly — a force-quit, a crash, a `pkill` of the app.
+   *
+   * They are identified by Harbor's own home directory appearing in their
+   * argv, so this can only ever match something Harbor started: a dnsmasq or
+   * php-fpm pointed at a config under ~/.harbor. An orphan still holds its
+   * port and socket, so the next launch fails to bind with no obvious cause.
+   */
+  static async reclaimOrphans(harborHome: string): Promise<number> {
+    const listing = await new Promise<string>((resolve) => {
+      const ps = spawn('/bin/ps', ['-Ao', 'pid=,args='])
+      let buf = ''
+      ps.stdout.setEncoding('utf8')
+      ps.stdout.on('data', (c: string) => (buf += c))
+      ps.on('error', () => resolve(''))
+      ps.on('close', () => resolve(buf))
+    })
+
+    let killed = 0
+    for (const line of listing.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed.includes(harborHome)) continue
+      // Only the daemons Harbor runs against its own config, never editors or
+      // shells that merely mention the path.
+      if (!/\b(dnsmasq|php-fpm)\b/.test(trimmed)) continue
+
+      const pid = Number(trimmed.split(/\s+/)[0])
+      if (!Number.isFinite(pid) || pid === process.pid) continue
+      try {
+        process.kill(pid, 'SIGTERM')
+        killed++
+      } catch {
+        /* already gone, or not ours to kill */
+      }
+    }
+    return killed
+  }
+
   /** Poll `ps` for CPU/RSS. Kafka and Elasticsearch make this worth surfacing. */
   startUsagePolling(intervalMs = 4000): void {
     if (this.usageTimer) return

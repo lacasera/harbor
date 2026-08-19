@@ -14,7 +14,7 @@ import { ProjectManager } from './projects/index.js'
 import { DnsmasqManager } from './projects/dnsmasq.js'
 import { TlsManager } from './projects/tls.js'
 import { CodeIntelligence, createCodeIntelligence } from './intelligence/index.js'
-import { ensureDirs } from './core/paths.js'
+import { ensureDirs, HARBOR_HOME } from './core/paths.js'
 
 /**
  * Composition root. Every subsystem is constructed exactly once here and passed
@@ -82,6 +82,14 @@ export class HarborApp {
   }
 
   async start(): Promise<void> {
+    // A previous Harbor that was force-quit leaves its daemons holding ports
+    // and sockets; the next launch then fails to bind for no visible reason.
+    const reclaimed = await ProcessManager.reclaimOrphans(HARBOR_HOME).catch(() => 0)
+    if (reclaimed) {
+      this.logs.push('harbor', 'startup', `reclaimed ${reclaimed} orphaned process(es)`)
+      await new Promise((r) => setTimeout(r, 500))
+    }
+
     this.processes.startUsagePolling()
     this.services.startHealthPolling()
     this.projects.nginx.ensureRootConfig()

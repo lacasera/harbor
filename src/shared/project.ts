@@ -79,6 +79,17 @@ export interface ProjectDescriptor extends Project {
   resolvedStartCommand: string | null
   /** ProcessManager id of the dev server, when running. */
   processId: string | null
+  /** The project's own dev-server process. Always false for fpm and static. */
   running: boolean
+  /**
+   * Whether a request to this site would actually be answered right now.
+   * An fpm site has no process of its own — nginx and a PHP-FPM pool serve it —
+   * so process state is the wrong question to ask of it.
+   */
+  served: boolean
+  /** What is doing the serving, e.g. "php-fpm 8.5" or "node · pid 41902". */
+  servedBy: string | null
+  /** Why it isn't served, when it isn't. */
+  servedProblem: string | null
   url: string
 }

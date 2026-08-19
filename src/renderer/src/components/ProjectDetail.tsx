@@ -93,7 +93,7 @@ export function ProjectDetail({
         >
           <div>
             <div className="hstack" style={{ gap: 9 }}>
-              <StatusDot status={project.running ? 'running' : 'stopped'} />
+              <StatusDot status={project.served ? 'running' : 'stopped'} />
               <span className="page-title">{project.name}</span>
               <span className="pill">
                 <TypeIcon frameworkId={project.frameworkId} typeId={project.typeId} size={13} />
@@ -256,6 +256,8 @@ function Overview({
   const runtime = runtimes.find((r) => r.id === resolved?.runtime)
   const versions = runtime?.installedVersions ?? []
 
+  // An fpm or static site has no process of its own, so reporting PID/CPU for
+  // it was reporting nothing. Show what actually serves it instead.
   const stats: Array<[string, string]> =
     project.serveModel === 'reverse-proxy'
       ? [
@@ -267,8 +269,8 @@ function Overview({
       : [
           ['Serve model', project.serveModel],
           ['Front door', 'nginx'],
-          ['Port', project.port ? String(project.port) : '—'],
-          ['Restarts', proc ? String(proc.restarts) : '—']
+          ['Handler', project.servedBy ?? '—'],
+          ['Runtime', project.resolvedRuntime ? `${project.resolvedRuntime.runtime} ${project.resolvedRuntime.version}` : '—']
         ]
 
   return (
@@ -401,10 +403,10 @@ function Overview({
       <div className="stack">
         <div className="card">
           <div className="card-head">
-            <span>Process</span>
+            <span>{project.serveModel === 'reverse-proxy' ? 'Process' : 'Serving'}</span>
             <span className="hstack" style={{ gap: 6, fontSize: 11.5, color: 'var(--tx2)' }}>
-              <StatusDot status={project.running ? 'running' : 'stopped'} small />
-              {project.running ? 'Running' : 'Idle'}
+              <StatusDot status={project.served ? 'running' : 'stopped'} small />
+              {project.served ? 'Serving' : project.serveModel === 'reverse-proxy' ? 'Idle' : 'Not served'}
             </span>
           </div>
           <div style={{ padding: '4px 14px 12px' }}>
@@ -414,6 +416,11 @@ function Overview({
                 <span className="v">{v}</span>
               </div>
             ))}
+            {project.servedProblem && (
+              <p className="small" style={{ color: 'var(--am)', marginTop: 10 }}>
+                {project.servedProblem}
+              </p>
+            )}
           </div>
         </div>
 

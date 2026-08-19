@@ -138,7 +138,8 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                   onBlur={() => tld && tld !== settings?.tld && void patch({ tld })}
                 />
                 <span className="small muted">
-                  sites resolve at <span className="mono">&lt;name&gt;.{tld || 'test'}</span>
+                  every site is re-homed; you then need a resolver for{' '}
+                  <span className="mono">.{tld || 'test'}</span> below
                 </span>
               </div>
             </div>

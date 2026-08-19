@@ -209,6 +209,49 @@ export class ProjectManager extends EventEmitter {
     return { written, removed, failed }
   }
 
+  /**
+   * Re-home every project onto a new TLD.
+   *
+   * The domain is stored per project, so changing the setting alone left every
+   * site on the old name with a vhost and certificate to match — the control
+   * appeared to work and changed nothing. This renames them, drops the stale
+   * vhosts, and re-issues certificates for secured sites.
+   *
+   * The caller still has to point DNS at the new TLD: that needs a root-written
+   * /etc/resolver file.
+   */
+  async changeTld(next: string): Promise<{ renamed: Array<[string, string]>; failed: Array<[string, string]> }> {
+    const renamed: Array<[string, string]> = []
+    const failed: Array<[string, string]> = []
+
+    for (const project of this.list()) {
+      const from = project.domain
+      const to = `${project.name}.${next}`
+      if (from === to) continue
+
+      try {
+        // Remove the old vhost before the domain changes, or its filename —
+        // derived from the domain — becomes unreachable and it lingers forever,
+        // still claiming that server_name.
+        this.nginx.remove(project)
+        project.domain = to
+
+        this.deps.store.update((st) => {
+          const idx = st.projects.findIndex((p) => p.id === project.id)
+          if (idx >= 0) st.projects[idx] = project
+        })
+
+        await this.writeVhost(project)
+        renamed.push([from, to])
+      } catch (err) {
+        failed.push([to, (err as Error).message])
+      }
+    }
+
+    if (renamed.length) await this.rewriteAllVhosts().catch(() => undefined)
+    return { renamed, failed }
+  }
+
   async forget(id: string): Promise<void> {
     const project = this.find(id)
     const handle = this.deps.processes.findByOwner('project', id)
@@ -450,6 +493,7 @@ export class ProjectManager extends EventEmitter {
 
   async describe(project: Project): Promise<ProjectDescriptor> {
     const handle = this.deps.processes.findByOwner('project', project.id)
+    const serving = await this.servingState(project, handle?.state === 'running', handle?.pid ?? null)
     return {
       ...project,
       // Projects persisted before this field existed have no array.
@@ -458,7 +502,49 @@ export class ProjectManager extends EventEmitter {
       resolvedStartCommand: await this.resolveStartCommand(project).catch(() => null),
       processId: handle?.id ?? null,
       running: handle?.state === 'running',
+      served: serving.served,
+      servedBy: serving.by,
+      servedProblem: serving.problem,
       url: this.urlFor(project)
+    }
+  }
+
+  /**
+   * "Is this site up?" is a different question per serve model, and answering
+   * it with process state was wrong for two of the three: an fpm or static site
+   * has no process of its own and read as permanently idle while nginx served
+   * it perfectly well.
+   */
+  private async servingState(
+    project: Project,
+    processRunning: boolean,
+    pid: number | null
+  ): Promise<{ served: boolean; by: string | null; problem: string | null }> {
+    if (project.serveModel === 'reverse-proxy') {
+      return processRunning
+        ? { served: true, by: pid ? `dev server · pid ${pid}` : 'dev server', problem: null }
+        : { served: false, by: null, problem: 'dev server is not running' }
+    }
+
+    const nginxUp = await this.nginx.isRunningCached()
+    if (!nginxUp) return { served: false, by: null, problem: 'nginx is not running' }
+    if (!this.nginx.isConnected()) {
+      return { served: false, by: null, problem: "nginx isn't reading Harbor's vhosts" }
+    }
+
+    if (project.serveModel === 'static') {
+      return { served: true, by: 'nginx · static files', problem: null }
+    }
+
+    // fpm: nginx can only reach the site if the pool it points at is listening.
+    try {
+      const version = await this.resolvePhpVersion(project)
+      if (!this.deps.fpm.isRunning(version)) {
+        return { served: false, by: null, problem: `PHP-FPM ${version} pool is not running` }
+      }
+      return { served: true, by: `php-fpm ${version}`, problem: null }
+    } catch (err) {
+      return { served: false, by: null, problem: (err as Error).message }
     }
   }
 
