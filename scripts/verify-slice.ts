@@ -262,6 +262,9 @@ async function main(): Promise<void> {
         s.settings.httpPort = restore.httpPort
         s.settings.httpsPort = restore.httpsPort
       })
+      // Re-render with the restored ports; settings alone leave every vhost
+      // listening where nginx is not.
+      await harbor.projects.rewriteAllVhosts().catch(() => undefined)
     }
     await harbor.shutdown().catch(() => undefined)
     rmSync(dir, { recursive: true, force: true })

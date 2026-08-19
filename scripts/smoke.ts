@@ -5,8 +5,8 @@
  *
  * Run with: npm run smoke
  */
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import {
@@ -143,6 +143,51 @@ check('secured vhost listens on 443 with the mkcert pair', () => {
   assertWellFormed(conf)
   assert.match(conf, /listen 443 ssl;/)
   assert.match(conf, /ssl_certificate \/certs\/api\.test\.pem;/)
+})
+
+check('an unmatched host gets a catch-all, not another project', () => {
+  // Without a default server, nginx serves whichever vhost loaded first for
+  // that port — so a site with a stale or missing vhost silently returns a
+  // different project's content, which looks like nothing is wrong at all.
+  const dir = mkdtempSync(join(tmpdir(), 'harbor-default-'))
+  const original = process.env.HOME
+  try {
+    nginx.writeDefaultVhost({ httpPort: 80, httpsPort: 443, tld: 'test' })
+    const conf = readFileSync(join(homedir(), '.harbor', 'nginx', 'sites', '000-harbor-default.conf'), 'utf8')
+
+    assertWellFormed(conf.replace(/return 404 "[\s\S]*?";/g, 'return 404;'))
+    assert.match(conf, /server_name _;/)
+    assert.match(conf, /listen 80;/)
+    assert.match(conf, /return 404/)
+    // Named to sort ahead of every domain, so nginx treats it as the default.
+    assert.ok('000-harbor-default.conf' < 'acme.test.conf')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    if (original) process.env.HOME = original
+  }
+})
+
+check('the catch-all serves TLS only when a certificate exists', () => {
+  nginx.writeDefaultVhost({ httpPort: 80, httpsPort: 443, tld: 'test' })
+  const withoutCert = readFileSync(
+    join(homedir(), '.harbor', 'nginx', 'sites', '000-harbor-default.conf'),
+    'utf8'
+  )
+  // An ssl block with no certificate would stop nginx starting entirely.
+  assert.doesNotMatch(withoutCert, /listen 443 ssl/)
+
+  nginx.writeDefaultVhost({
+    httpPort: 80,
+    httpsPort: 443,
+    tld: 'test',
+    cert: { certFile: '/c.pem', keyFile: '/k.pem' }
+  })
+  const withCert = readFileSync(
+    join(homedir(), '.harbor', 'nginx', 'sites', '000-harbor-default.conf'),
+    'utf8'
+  )
+  assert.match(withCert, /listen 443 ssl;/)
+  assert.match(withCert, /ssl_certificate \/c\.pem;/)
 })
 
 check('a secured site still answers on the HTTP port with a redirect', () => {

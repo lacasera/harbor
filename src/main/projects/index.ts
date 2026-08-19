@@ -176,7 +176,15 @@ export class ProjectManager extends EventEmitter {
     const failed: Array<[string, string]> = []
     let written = 0
 
-    const expected = new Set<string>()
+    const { httpPort, httpsPort, tld } = this.deps.store.get().settings
+
+    // A wildcard certificate lets the catch-all answer HTTPS at all; without
+    // one, an unmatched host falls through to another site's TLS block, which
+    // is the bug this exists to prevent.
+    const wildcard = await this.deps.tls.certify(`*.${tld}`).catch(() => undefined)
+    this.nginx.writeDefaultVhost({ httpPort, httpsPort, tld, cert: wildcard })
+
+    const expected = new Set<string>(['000-harbor-default.conf'])
     for (const project of this.list()) {
       expected.add(`${project.domain}.conf`)
       try {
@@ -784,6 +792,21 @@ export class ProjectManager extends EventEmitter {
     if (!this.nginx.isConnected()) {
       return { served: false, by: null, problem: "nginx isn't reading Harbor's vhosts" }
     }
+    // A vhost rendered for different ports than nginx is serving matches
+    // nothing, and the request falls through to the catch-all — or, before it
+    // existed, to another project entirely. Cheap to check and the only
+    // symptom is "my site shows someone else's".
+    const { httpPort, httpsPort } = this.deps.store.get().settings
+    const rendered = this.nginx.read(project)
+    const wanted = project.secure ? httpsPort : httpPort
+    if (rendered && !new RegExp(`^\\s*listen ${wanted}[; ]`, 'm').test(rendered)) {
+      return {
+        served: false,
+        by: null,
+        problem: `its vhost is stale — rendered for different ports than nginx serves (:${wanted})`
+      }
+    }
+
     if (await this.nginx.workersCannotReadProjects()) {
       return {
         served: false,

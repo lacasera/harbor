@@ -37,6 +37,10 @@ void (async () => {
   try {
     // Bring the stack up on unprivileged ports.
     harbor.store.update((s) => { s.settings.httpPort = 8080; s.settings.httpsPort = 8443 })
+    // Re-render immediately: changing the ports without this leaves every
+    // vhost listening where nginx is not, which Harbor now correctly reports
+    // as a stale vhost.
+    await harbor.projects.rewriteAllVhosts()
     // Never call harbor.start() here. Its orphan reclaim exists for the app's
     // own startup and will kill daemons that are serving right now — including
     // ones the user depends on. Bring up only what this check needs.
@@ -104,6 +108,10 @@ void (async () => {
     await harbor.projects.changeTld(original).catch(() => undefined)
     harbor.store.update((s) => { s.settings.tld = original; s.settings.httpPort = 80; s.settings.httpsPort = 443 })
     await harbor.dns.start(original).catch(() => undefined)
+    // Re-render with the restored TLD and ports. Restoring settings alone
+    // leaves every vhost listening where nginx is not, so nginx matches none
+    // of them and serves whichever loaded first — every site showing one site.
+    await harbor.projects.rewriteAllVhosts().catch(() => undefined)
     // Leave dnsmasq and the FPM pools up: they may be serving the user's sites.
     harbor.store.flush()
   }

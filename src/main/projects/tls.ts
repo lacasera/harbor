@@ -41,13 +41,23 @@ export class TlsManager {
     await this.privileged.run(`${bin} -install`)
   }
 
+  /**
+   * Filenames are not domains: a wildcard cert for `*.test` must not produce a
+   * file literally named `*.test.pem`, which is a glob to every shell and tool
+   * that later reads the path. mkcert's own convention is used instead.
+   */
+  private fileStem(domain: string): string {
+    return domain.replace(/^\*\./, '_wildcard.')
+  }
+
   async certify(domain: string): Promise<{ certFile: string; keyFile: string }> {
     const bin = this.binary()
     if (!bin) throw new Error('mkcert is not installed')
     mkdirSync(paths.certs, { recursive: true })
 
-    const certFile = join(paths.certs, `${domain}.pem`)
-    const keyFile = join(paths.certs, `${domain}-key.pem`)
+    const stem = this.fileStem(domain)
+    const certFile = join(paths.certs, `${stem}.pem`)
+    const keyFile = join(paths.certs, `${stem}-key.pem`)
     if (existsSync(certFile) && existsSync(keyFile)) return { certFile, keyFile }
 
     await exec(`${bin} -cert-file "${certFile}" -key-file "${keyFile}" "${domain}"`)
