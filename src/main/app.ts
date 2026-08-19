@@ -58,6 +58,8 @@ export class HarborApp {
     registerRuntimes(this.runtimes, { native: this.native })
     const php = this.runtimes.get('php') as PhpRuntime
 
+    this.tls = new TlsManager(this.native, this.privileged)
+
     this.projects = new ProjectManager({
       store: this.store,
       processes: this.processes,
@@ -65,11 +67,11 @@ export class HarborApp {
       runtimes: this.runtimes,
       php,
       native: this.native,
-      privileged: this.privileged
+      privileged: this.privileged,
+      tls: this.tls
     })
 
-    this.dns = new DnsmasqManager(this.native, this.privileged)
-    this.tls = new TlsManager(this.native, this.privileged)
+    this.dns = new DnsmasqManager(this.native, this.privileged, this.processes)
     this.intelligence = createCodeIntelligence()
   }
 

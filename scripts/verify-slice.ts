@@ -105,6 +105,15 @@ async function main(): Promise<void> {
     const started = await harbor.projects.start(project.id)
     step('dev server spawned', started.running, started.resolvedStartCommand ?? '')
 
+    // Regenerate every vhost and drop orphans first: nginx validates the whole
+    // config at once, so one stale file would fail the connect for all sites.
+    const swept = await harbor.projects.rewriteAllVhosts()
+    step(
+      'vhosts regenerated and orphans swept',
+      swept.failed.length === 0,
+      `${swept.written} written, ${swept.removed} removed`
+    )
+
     // The vhost is rendered on park; connect nginx so it is actually read.
     await harbor.projects.nginx.connect()
     step(
@@ -153,6 +162,49 @@ async function main(): Promise<void> {
       'dev-server output reached the log aggregator',
       lines.some((l) => l.message.includes('listening on')),
       `${lines.length} lines`
+    )
+
+    // ── DNS ───────────────────────────────────────────────────────────────
+    // dnsmasq runs unprivileged, so this is fully checkable. Only the
+    // /etc/resolver file needs root, and it is one line naming this port.
+    const tld = harbor.store.get().settings.tld
+    await harbor.dns.start(tld)
+
+    const answer = await harbor.dns.answers(`harbor-probe.${tld}`)
+    step(`dnsmasq resolves *.${tld} to 127.0.0.1`, answer === '127.0.0.1', answer ?? 'no answer')
+
+    const dns = await harbor.dns.status(tld)
+    step('dnsmasq managed by ProcessManager', dns.running, `port ${dns.port}`)
+    step(
+      `/etc/resolver/${tld} written`,
+      dns.resolverConfigured,
+      dns.resolverConfigured ? '' : 'needs one root prompt — run it from Settings'
+    )
+
+    const dnsLogs = harbor.logs.query({ sources: ['dnsmasq'], limit: 20 })
+    step('dnsmasq logs reach the aggregator', dnsLogs.length > 0, `${dnsLogs.length} lines`)
+
+    // ── TLS ───────────────────────────────────────────────────────────────
+    const secured = await harbor.projects.update(project.id, { secure: true })
+    step('certificate issued for the site', secured.secure && secured.url.startsWith('https://'))
+
+    await execFile(NGINX, ['-s', 'reload']).catch(() => undefined)
+    await wait(800)
+
+    // /usr/bin/curl uses Secure Transport, so this proves the CA is actually
+    // trusted by the system rather than merely present on disk.
+    const https = await execFile('/usr/bin/curl', [
+      '-s',
+      '--max-time',
+      '10',
+      '--resolve',
+      `${secured.domain}:8443:127.0.0.1`,
+      `https://${secured.domain}:8443/`
+    ]).catch((err: Error) => ({ stdout: `ERR ${err.message.split('\n')[0]}` }))
+    step(
+      'HTTPS served with a trusted local certificate',
+      https.stdout.includes('harbor-slice-ok'),
+      https.stdout.trim().slice(0, 70)
     )
   } finally {
     if (projectId) await harbor.projects.forget(projectId).catch(() => undefined)

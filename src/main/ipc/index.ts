@@ -104,8 +104,35 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
     })
     return { ...harbor.store.get().settings }
   })
+  const tld = (): string => harbor.store.get().settings.tld
+
   handle('tls:status', () => harbor.tls.status())
-  handle('dns:status', () => harbor.dns.status(harbor.store.get().settings.tld))
+  handle('tls:install', async () => {
+    await harbor.tls.install()
+    return harbor.tls.status()
+  })
+  handle('tls:installCa', async () => {
+    await harbor.tls.installCa()
+    return harbor.tls.status()
+  })
+
+  handle('dns:status', () => harbor.dns.status(tld()))
+  handle('dns:install', async () => {
+    await harbor.dns.install()
+    return harbor.dns.status(tld())
+  })
+  handle('dns:start', async () => {
+    await harbor.dns.start(tld())
+    return harbor.dns.status(tld())
+  })
+  handle('dns:stop', async () => {
+    await harbor.dns.stop()
+    return harbor.dns.status(tld())
+  })
+  handle('dns:configureResolver', async () => {
+    await harbor.dns.configureResolver(tld())
+    return harbor.dns.status(tld())
+  })
 
   // ── nginx ───────────────────────────────────────────────────────────────
   handle('nginx:status', () => harbor.projects.nginx.status())

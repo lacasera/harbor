@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
@@ -19,6 +19,7 @@ import type { PrivilegedHelper } from '../core/privileged-helper.js'
 import { paths } from '../core/paths.js'
 import { binDirOf, resolveBinary } from '../core/resolve-binary.js'
 import { NginxManager, type VhostContext } from './nginx-manager.js'
+import type { TlsManager } from './tls.js'
 import { PhpFrameworkRegistry, createPhpFrameworkRegistry } from './php-frameworks/index.js'
 import { PhpProjectType } from './types/php.js'
 import { NodeServerProjectType } from './types/node-server.js'
@@ -32,6 +33,7 @@ export interface ProjectManagerDeps {
   php: PhpRuntime
   native: NativeBackend
   privileged: PrivilegedHelper
+  tls: TlsManager
 }
 
 export class ProjectManager extends EventEmitter {
@@ -154,11 +156,17 @@ export class ProjectManager extends EventEmitter {
    * valid. Failures are collected rather than thrown: one broken project must
    * not stop the other sites from being served.
    */
-  async rewriteAllVhosts(): Promise<{ written: number; failed: Array<[string, string]> }> {
+  async rewriteAllVhosts(): Promise<{
+    written: number
+    removed: number
+    failed: Array<[string, string]>
+  }> {
     const failed: Array<[string, string]> = []
     let written = 0
 
+    const expected = new Set<string>()
     for (const project of this.list()) {
+      expected.add(`${project.domain}.conf`)
       try {
         await this.writeVhost(project)
         written++
@@ -167,11 +175,23 @@ export class ProjectManager extends EventEmitter {
       }
     }
 
-    if (written && this.nginx.isConnected()) {
+    // Harbor owns this directory outright. An orphan left by a forgotten
+    // project — or by an older build — is still loaded by nginx, and one
+    // malformed file makes `nginx -t` fail for every site at once.
+    let removed = 0
+    if (existsSync(paths.vhosts)) {
+      for (const file of readdirSync(paths.vhosts)) {
+        if (!file.endsWith('.conf') || expected.has(file)) continue
+        rmSync(join(paths.vhosts, file), { force: true })
+        removed++
+      }
+    }
+
+    if ((written || removed) && this.nginx.isConnected()) {
       const check = await this.nginx.test()
       if (check.ok) await this.nginx.reload().catch(() => undefined)
     }
-    return { written, failed }
+    return { written, removed, failed }
   }
 
   async forget(id: string): Promise<void> {
@@ -263,9 +283,22 @@ export class ProjectManager extends EventEmitter {
     }
 
     if (project.secure) {
-      const certFile = join(paths.certs, `${project.domain}.pem`)
-      const keyFile = join(paths.certs, `${project.domain}-key.pem`)
-      if (existsSync(certFile) && existsSync(keyFile)) ctx.cert = { certFile, keyFile }
+      // Issue on demand. Previously this only picked up a cert that happened to
+      // exist already, so enabling TLS silently kept serving plain HTTP.
+      try {
+        ctx.cert = await this.deps.tls.certify(project.domain)
+      } catch (err) {
+        const certFile = join(paths.certs, `${project.domain}.pem`)
+        const keyFile = join(paths.certs, `${project.domain}-key.pem`)
+        if (existsSync(certFile) && existsSync(keyFile)) {
+          ctx.cert = { certFile, keyFile }
+        } else {
+          throw new Error(
+            `Cannot secure ${project.domain}: ${(err as Error).message}. ` +
+              `Install mkcert and its CA from Settings first.`
+          )
+        }
+      }
     }
 
     this.nginx.write(ctx)

@@ -36,11 +36,17 @@ export class NativeBackend implements Backend<NativeStartOptions> {
     return BREW_PREFIXES.find((p) => existsSync(join(p, 'bin', 'brew'))) ?? null
   }
 
-  /** Absolute path to a brew-installed binary, or null. */
+  /**
+   * Absolute path to a brew-installed binary, or null. Both bin and sbin are
+   * searched: Homebrew installs daemons like dnsmasq into sbin, and looking
+   * only in bin makes them appear uninstalled.
+   */
   which(binary: string): string | null {
     for (const prefix of BREW_PREFIXES) {
-      const candidate = join(prefix, 'bin', binary)
-      if (existsSync(candidate)) return candidate
+      for (const dir of ['bin', 'sbin']) {
+        const candidate = join(prefix, dir, binary)
+        if (existsSync(candidate)) return candidate
+      }
     }
     return null
   }

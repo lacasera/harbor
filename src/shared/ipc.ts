@@ -5,6 +5,20 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 
+export interface TlsStatus {
+  installed: boolean
+  caInstalled: boolean
+}
+
+export interface DnsStatus {
+  installed: boolean
+  running: boolean
+  resolverConfigured: boolean
+  port: number
+  /** dnsmasq itself answered a probe correctly, independent of /etc/resolver. */
+  resolves: boolean
+}
+
 /**
  * Whether the system nginx is actually reading Harbor's vhosts. `connected`
  * false means every generated vhost is inert.
@@ -86,8 +100,16 @@ export interface IpcContract {
   'settings:get': [[], AppSettings]
   'settings:update': [[patch: Partial<AppSettings>], AppSettings]
 
-  'tls:status': [[], { installed: boolean; caInstalled: boolean }]
-  'dns:status': [[], { installed: boolean; configured: boolean }]
+  'tls:status': [[], TlsStatus]
+  'tls:install': [[], TlsStatus]
+  'tls:installCa': [[], TlsStatus]
+
+  'dns:status': [[], DnsStatus]
+  'dns:install': [[], DnsStatus]
+  'dns:start': [[], DnsStatus]
+  'dns:stop': [[], DnsStatus]
+  /** Writes /etc/resolver/<tld>. The only privileged step in DNS setup. */
+  'dns:configureResolver': [[], DnsStatus]
 
   'nginx:status': [[], NginxStatus]
   'nginx:reload': [[], void]

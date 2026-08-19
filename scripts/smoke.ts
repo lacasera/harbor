@@ -134,6 +134,35 @@ check('secured vhost listens on 443 with the mkcert pair', () => {
   assert.match(conf, /ssl_certificate \/certs\/api\.test\.pem;/)
 })
 
+check('a secured site still answers on the HTTP port with a redirect', () => {
+  const conf = nginx.render({
+    project: baseProject({ secure: true }),
+    root: '/tmp/api',
+    proxyPort: 3100,
+    httpPort: 8081,
+    httpsPort: 8443,
+    cert: { certFile: '/certs/api.test.pem', keyFile: '/certs/api.test-key.pem' }
+  })
+  assertWellFormed(conf)
+  // Two server blocks: the redirect and the TLS site. Without the first,
+  // http://<site> falls through to whichever vhost is that port's default.
+  assert.equal(conf.match(/^server \{$/gm)?.length, 2)
+  assert.match(conf, /listen 8081;/)
+  assert.match(conf, /return 301 https:\/\/\$host:8443\$request_uri;/)
+  assert.match(conf, /listen 8443 ssl;/)
+})
+
+check('the redirect omits the port when https is on 443', () => {
+  const conf = nginx.render({
+    project: baseProject({ secure: true }),
+    root: '/tmp/api',
+    proxyPort: 3100,
+    cert: { certFile: '/c.pem', keyFile: '/k.pem' }
+  })
+  assertWellFormed(conf)
+  assert.match(conf, /return 301 https:\/\/\$host\$request_uri;/)
+})
+
 check('framework detection prefers specific over generic', async () => {
   const registry = createPhpFrameworkRegistry()
   const root = mkdtempSync(join(tmpdir(), 'harbor-detect-'))

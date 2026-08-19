@@ -1,12 +1,56 @@
 import { useEffect, useState } from 'react'
-import type { AppSettings, NginxStatus } from '../../../shared/ipc.js'
+import type { AppSettings, DnsStatus, NginxStatus, TlsStatus } from '../../../shared/ipc.js'
 import { invoke } from '../ipc/client.js'
 import { Toggle } from './primitives.js'
 
 interface SystemStatus {
   nginx: NginxStatus
-  tls: { installed: boolean; caInstalled: boolean }
-  dns: { installed: boolean; configured: boolean }
+  tls: TlsStatus
+  dns: DnsStatus
+}
+
+/** A system component's state plus the one action that advances it. */
+function Step({
+  label,
+  hint,
+  ok,
+  detail,
+  action,
+  busy,
+  onRun
+}: {
+  label: string
+  hint: string
+  ok: boolean
+  detail: string
+  action: string | null
+  busy: boolean
+  onRun: () => void
+}): React.JSX.Element {
+  return (
+    <div className="row">
+      <div>
+        <div className="k">{label}</div>
+        <div className="hint">{hint}</div>
+      </div>
+      <div className="v">
+        <span className="hstack" style={{ gap: 6, fontSize: 12, color: 'var(--tx2)' }}>
+          <span className={`dot sm ${ok ? 'running' : 'error'}`} />
+          {detail}
+        </span>
+        {action && (
+          <button
+            type="button"
+            className={`btn xs ${ok ? '' : 'outline-ac'}`}
+            disabled={busy}
+            onClick={onRun}
+          >
+            {busy ? 'Working…' : action}
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function SettingsView({ version, homeDir }: { version: string; homeDir: string }): React.JSX.Element {
@@ -25,6 +69,19 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
       .then(([nginx, tls, dns]) => setStatus({ nginx, tls, dns }))
       .catch((err: Error) => setError(err.message))
   }, [])
+
+  /** Run a setup action and fold its returned status back into view state. */
+  const act = (
+    channel: 'tls:install' | 'tls:installCa' | 'dns:install' | 'dns:start' | 'dns:stop' | 'dns:configureResolver',
+    apply: (next: TlsStatus | DnsStatus) => void
+  ): void => {
+    setBusy(true)
+    setError(null)
+    void invoke(channel)
+      .then((next) => apply(next))
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false))
+  }
 
   const patch = async (next: Partial<AppSettings>): Promise<void> => {
     setError(null)
@@ -70,37 +127,83 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
               </div>
             </div>
 
-            <div className="row">
-              <div>
-                <div className="k">Certificate authority</div>
-                <div className="hint">mkcert, trusted in the system keychain</div>
-              </div>
-              <div className="v">
-                <span className="mono small" style={{ color: 'var(--tx2)' }}>
-                  {status?.tls.caInstalled
-                    ? 'harbor local CA · trusted'
-                    : status?.tls.installed
-                      ? 'mkcert installed · CA not trusted yet'
-                      : 'mkcert not installed'}
-                </span>
-              </div>
-            </div>
+            <Step
+              label="Certificate authority"
+              hint="mkcert, trusted in the system keychain"
+              ok={Boolean(status?.tls.caInstalled)}
+              detail={
+                status?.tls.caInstalled
+                  ? 'local CA trusted'
+                  : status?.tls.installed
+                    ? 'installed · CA not trusted yet'
+                    : 'mkcert not installed'
+              }
+              action={
+                status?.tls.caInstalled
+                  ? null
+                  : status?.tls.installed
+                    ? 'Trust the CA…'
+                    : 'Install mkcert'
+              }
+              busy={busy}
+              onRun={() =>
+                act(status?.tls.installed ? 'tls:installCa' : 'tls:install', (next) =>
+                  setStatus((s) => (s ? { ...s, tls: next as TlsStatus } : s))
+                )
+              }
+            />
+          </div>
 
-            <div className="row">
-              <div>
-                <div className="k">DNS resolver</div>
-                <div className="hint">dnsmasq answering *.{tld || 'test'}</div>
-              </div>
-              <div className="v">
-                <span className="mono small" style={{ color: 'var(--tx2)' }}>
-                  {status?.dns.configured
-                    ? `/etc/resolver/${tld || 'test'} configured`
-                    : status?.dns.installed
-                      ? 'dnsmasq installed · resolver not written'
-                      : 'dnsmasq not installed'}
-                </span>
-              </div>
-            </div>
+          <div className="card">
+            <div className="section-label">DNS</div>
+
+            <Step
+              label="dnsmasq"
+              hint={`Answers *.${tld || 'test'} on port ${status?.dns.port ?? 5300} — no root needed`}
+              ok={Boolean(status?.dns.installed)}
+              detail={status?.dns.installed ? 'installed' : 'not installed'}
+              action={status?.dns.installed ? null : 'Install dnsmasq'}
+              busy={busy}
+              onRun={() =>
+                act('dns:install', (next) =>
+                  setStatus((s) => (s ? { ...s, dns: next as DnsStatus } : s))
+                )
+              }
+            />
+
+            <Step
+              label="Resolution"
+              hint="Harbor runs dnsmasq itself, so it starts and stops with the app"
+              ok={Boolean(status?.dns.resolves)}
+              detail={
+                status?.dns.resolves
+                  ? `answering *.${tld || 'test'}`
+                  : status?.dns.running
+                    ? 'running but not answering'
+                    : 'stopped'
+              }
+              action={status?.dns.running ? 'Stop' : 'Start'}
+              busy={busy}
+              onRun={() =>
+                act(status?.dns.running ? 'dns:stop' : 'dns:start', (next) =>
+                  setStatus((s) => (s ? { ...s, dns: next as DnsStatus } : s))
+                )
+              }
+            />
+
+            <Step
+              label="System resolver"
+              hint={`/etc/resolver/${tld || 'test'} — the only step that needs your password`}
+              ok={Boolean(status?.dns.resolverConfigured)}
+              detail={status?.dns.resolverConfigured ? 'configured' : 'not written'}
+              action={status?.dns.resolverConfigured ? null : 'Write resolver…'}
+              busy={busy}
+              onRun={() =>
+                act('dns:configureResolver', (next) =>
+                  setStatus((s) => (s ? { ...s, dns: next as DnsStatus } : s))
+                )
+              }
+            />
           </div>
 
           <div className="card">

@@ -8,14 +8,15 @@ Status as of the design-implementation commit (`27700ca`).
 drivers with the `VersionResolver`, `ProjectManager` + `NginxManager` + four PHP
 framework drivers, dnsmasq/mkcert modules, two analyzers, and the full UI.
 
-**Status:** the vertical slice now works end to end. `npm run verify:slice`
+**Status:** Phase 1 and the Phase 2 slice are complete. A browser-shaped
+request now works: real macOS DNS → nginx → HTTP 301 → trusted HTTPS → the dev
+server, with every process's output in the log aggregator. `npm run verify:slice`
 parks a real project, spawns its dev server, connects the system nginx and
 proves an HTTP request reaches the app on its persisted port with stdout in the
 log aggregator — 9/9 steps. Herd has been stopped and Harbor owns this machine's
 dev environment; `nginx`, `dnsmasq`, `mkcert` and `nss` are installed.
 
-Still unproven: DNS (`*.test` resolution) and TLS, both of which need a
-root-written file. Requests are currently verified with an explicit Host header.
+`npm run verify:slice` covers all 16 steps of it.
 
 Definition of done for v1 is the vertical slice named in `CLAUDE.md`:
 
@@ -84,18 +85,27 @@ The blocking phase. Each task ends with something observable in a browser.
   return the path Harbor actually created. Add health detection.
   *Done when:* a Laravel app parks and serves at `<name>.test`.
 
-- [ ] **1.3 — Run the dnsmasq + resolver setup for real.** ← *next*
-  Herd's `/etc/resolver/test` (backed up: `nameserver 127.0.0.1`, `port 5300`)
-  must be replaced with Harbor's. Needs `dnsmasq:configure` over IPC so the app
-  can drive it through `PrivilegedHelper`'s prompt.
+- [x] **1.3 — dnsmasq + resolver working.** *(done)*
+  dnsmasq now runs **unprivileged on port 5300** through `ProcessManager`
+  (lifecycle and logs for free) rather than as root on 53 via `brew services`.
+  The macOS resolver file can name a port, so binding 53 bought nothing and
+  would have forced the whole DNS path to run as root. That leaves exactly one
+  privileged action ever: writing `/etc/resolver/<tld>`.
+  Verified: `dscacheutil` resolves `*.test` → 127.0.0.1 through the real macOS
+  resolver stack.
   `DnsmasqManager` is written but has never been executed. Verify the brew
   path, the fragment location, `/etc/resolver/<tld>`, and the restart command
   on a real machine; fix what the first run reveals.
   *Done when:* `dig foo.test @127.0.0.1` returns `127.0.0.1` and a browser
   resolves an arbitrary `*.test` name without an `/etc/hosts` entry.
 
-- [ ] **1.4 — Run the mkcert flow for real.** ← *next*
-  Also needs `tls:installCa` / `tls:certify` over IPC for the same reason.
+- [x] **1.4 — mkcert TLS working.** *(done)*
+  The CA was already trusted in the system keychain, so issuance needs no
+  privileged step at all. Securing a site now **issues the certificate on
+  demand** — previously the toggle only picked up a cert that happened to exist,
+  so enabling TLS silently kept serving plain HTTP.
+  Verified: `/usr/bin/curl` (Secure Transport, so it consults the keychain)
+  loads `https://<site>.test:8443` with no `-k`.
   Same: `TlsManager` is unexercised. Confirm CA install, per-site cert issue,
   and that a `secure: true` vhost serves HTTPS without a browser warning.
   Wire "Secure (TLS)" on the project Overview to issue the cert before
@@ -157,6 +167,17 @@ Every one of these was invisible to the type checker and to the original tests.
   Now a no-op, and the unprivileged reload is tried before escalating at all.
 - [x] **Config writes could be lost on a prompt exit** (debounced onto a
   microtask). Added `ConfigStore.flush()`, called from `shutdown()`.
+- [x] **`which()` only searched `bin/`**, so Homebrew daemons installed to
+  `sbin/` — dnsmasq among them — looked uninstalled.
+- [x] **A secured site was unreachable over HTTP.** The vhost listened on 443
+  only, so `http://<site>` fell through to whichever vhost was that port's
+  default server, serving another project or a 403. Securing a site now also
+  emits a 301 redirect block, as Valet and Herd do.
+- [x] **`dns.start()` returned before dnsmasq was listening**, so the next query
+  failed for no real reason. It now polls until the probe answers.
+- [x] **One stale vhost broke every site.** nginx validates the whole config at
+  once, so an orphan left by a forgotten project (or an older build) failed
+  `nginx -t` for all of them. Boot now sweeps vhosts with no matching project.
 
 ## Phase 3 — correctness and robustness
 
