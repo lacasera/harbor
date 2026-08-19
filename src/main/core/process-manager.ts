@@ -62,6 +62,7 @@ export class ProcessManager extends EventEmitter {
 
     const managed: Managed = { handle, child }
     this.processes.set(id, managed)
+    if (req.logStream) this.streams.set(id, req.logStream)
 
     child.on('spawn', () => {
       handle.pid = child.pid ?? null
@@ -111,9 +112,11 @@ export class ProcessManager extends EventEmitter {
     const src = stream === 'stdout' ? child.stdout : child.stderr
     src?.setEncoding('utf8')
     src?.on('data', (chunk: string) => {
-      this.emit('log', { handle, stream, chunk })
+      this.emit('log', { handle, stream: this.streams.get(handle.id) ?? stream, chunk })
     })
   }
+
+  private readonly streams = new Map<string, string>()
 
   get(id: string): ProcessHandle | null {
     const m = this.processes.get(id)
@@ -129,10 +132,18 @@ export class ProcessManager extends EventEmitter {
    * has exited, which is what lets callers distinguish "never started" from
    * "started and crashed".
    */
-  findByOwner(kind: string, ownerId: string, includeDead = false): ProcessHandle | null {
+  findByOwner(
+    kind: string,
+    ownerId: string,
+    includeDead = false,
+    role?: string
+  ): ProcessHandle | null {
     let dead: ProcessHandle | null = null
     for (const m of this.processes.values()) {
       if (m.handle.owner.kind !== kind || m.handle.owner.id !== ownerId) continue
+      // A project runs a server plus companions; without this the first match
+      // wins and "is the site up?" answers about the queue worker.
+      if (role !== undefined && (m.handle.owner.role ?? 'server') !== role) continue
       if (m.child) return { ...m.handle }
       if (includeDead) dead = { ...m.handle }
     }

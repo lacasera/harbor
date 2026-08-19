@@ -43,24 +43,25 @@ export class PhpFpmManager {
    * as down whenever it was started by an earlier run, which then showed as
    * "not served" on a site that serves fine.
    */
-  isRunning(version: string): boolean {
-    if (this.processes.findByOwner('system', this.ownerId(version)) !== null) return true
-    return this.socketAlive(version)
-  }
-
   /**
-   * A socket file can outlive the pool that made it, so existence is not
-   * enough — try to connect. Local unix sockets make this effectively free.
+   * Whether this pool is usable — not merely whether *this* instance spawned
+   * it. Asking only about our own children reported a perfectly healthy pool
+   * as down whenever it was started by an earlier run.
+   *
+   * Async on purpose: the first version of this guessed `true` while an async
+   * probe settled, which made a site's status non-deterministic on the first
+   * read after launch. Answering only when the answer is known is worth the
+   * few milliseconds a local socket connect costs.
    */
-  private socketAlive(version: string): boolean {
+  async isRunning(version: string): Promise<boolean> {
+    if (this.processes.findByOwner('system', this.ownerId(version)) !== null) return true
+
     const socket = this.socketPath(version)
     if (!existsSync(socket)) return false
 
     const cached = this.aliveCache.get(socket)
     if (cached && Date.now() - cached.at < 3000) return cached.value
-    // Kick off a probe for the next caller; report existence meanwhile.
-    void this.probeSocket(socket)
-    return cached?.value ?? true
+    return this.probeSocket(socket)
   }
 
   private readonly aliveCache = new Map<string, { value: boolean; at: number }>()
@@ -68,14 +69,26 @@ export class PhpFpmManager {
   private probeSocket(socket: string): Promise<boolean> {
     return new Promise((resolve) => {
       const client = connect(socket)
-      const settle = (value: boolean): void => {
-        this.aliveCache.set(socket, { value, at: Date.now() })
+      let done = false
+      // The timeout must be cancelled on success. Left running, it fired half a
+      // second after a healthy connect and wrote `false` over the cached
+      // `true` — so a pool that was answering requests reported itself down
+      // for the next three seconds, intermittently and only sometimes.
+      const timer = setTimeout(() => settle(false), 500)
+
+      function settle(value: boolean): void {
+        if (done) return
+        done = true
+        clearTimeout(timer)
         client.destroy()
         resolve(value)
       }
+
       client.once('connect', () => settle(true))
       client.once('error', () => settle(false))
-      setTimeout(() => settle(false), 500)
+    }).then((value) => {
+      this.aliveCache.set(socket, { value: value as boolean, at: Date.now() })
+      return value as boolean
     })
   }
 
@@ -126,7 +139,7 @@ export class PhpFpmManager {
   }
 
   async start(version: string): Promise<void> {
-    if (this.isRunning(version)) return
+    if (await this.isRunning(version)) return
 
     const binary = this.php.fpmBinary(version)
     if (!binary) {

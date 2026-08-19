@@ -5,6 +5,9 @@ import { randomUUID } from 'node:crypto'
 import type {
   Project,
   ProjectDescriptor,
+  ProjectProcessDescriptor,
+  ProjectProcessOverride,
+  ProjectProcessSpec,
   ProjectType,
   ProjectTypeId
 } from '../../shared/project.js'
@@ -139,6 +142,7 @@ export class ProjectManager extends EventEmitter {
       startCommandOverride: null,
       runtimeOverride: null,
       serviceIds: [],
+      processOverrides: {},
       createdAt: Date.now()
     }
 
@@ -261,8 +265,7 @@ export class ProjectManager extends EventEmitter {
 
   async forget(id: string): Promise<void> {
     const project = this.find(id)
-    const handle = this.deps.processes.findByOwner('project', id)
-    if (handle) await this.deps.processes.stop(handle.id)
+    await this.stopAllProcesses(id)
     this.deps.logs.detach(id)
     this.nginx.remove(project)
     this.deps.ports.release(`project:${id}`)
@@ -456,18 +459,153 @@ export class ProjectManager extends EventEmitter {
     this.deps.logs.attach(project.id, await this.logSourcesFor(project))
   }
 
+  // ── companion processes ─────────────────────────────────────────────────
+
+  /**
+   * What the drivers say this project needs, merged: the project type's
+   * companions plus, for fpm sites, the framework's. Detected fresh each time
+   * so adding Horizon to composer.json shows up without re-parking.
+   */
+  async processSpecs(project: Project): Promise<ProjectProcessSpec[]> {
+    const specs: ProjectProcessSpec[] = []
+    try {
+      specs.push(...((await this.typeById(project.typeId).processes?.(project.path)) ?? []))
+    } catch {
+      /* a failing detector must not break the project page */
+    }
+
+    if (project.serveModel === 'fpm') {
+      const framework =
+        this.frameworks.get(project.frameworkId ?? '') ??
+        (await this.frameworks.detect(project.path).catch(() => null))
+      try {
+        specs.push(...((await framework?.processes?.(project.path)) ?? []))
+      } catch {
+        /* ditto */
+      }
+    }
+    return specs
+  }
+
+  /** Specs with the user's choices and live state folded in. */
+  async describeProcesses(project: Project): Promise<ProjectProcessDescriptor[]> {
+    const overrides = project.processOverrides ?? {}
+    return (await this.processSpecs(project)).map((spec) => {
+      const override = overrides[spec.id] ?? {}
+      const handle = this.deps.processes.findByOwner('project', project.id, true, spec.id)
+      return {
+        ...spec,
+        command: override.command ?? spec.command,
+        overridden: Boolean(override.command),
+        // The driver only recommends; a stored choice always wins.
+        enabled: override.enabled ?? spec.autoStart,
+        running: handle?.state === 'running',
+        processId: handle?.id ?? null,
+        pid: handle?.pid ?? null,
+        state: handle?.state ?? 'stopped'
+      }
+    })
+  }
+
+  async updateProcess(
+    projectId: string,
+    specId: string,
+    patch: ProjectProcessOverride
+  ): Promise<ProjectDescriptor> {
+    const project = this.find(projectId)
+    const overrides = { ...(project.processOverrides ?? {}) }
+    overrides[specId] = { ...overrides[specId], ...patch }
+    project.processOverrides = overrides
+
+    this.deps.store.update((st) => {
+      const idx = st.projects.findIndex((p) => p.id === projectId)
+      if (idx >= 0) st.projects[idx] = project
+    })
+
+    // Turning one off should stop it now, not at the next restart.
+    if (patch.enabled === false) await this.stopProcess(projectId, specId).catch(() => undefined)
+    return this.emitChanged(project)
+  }
+
+  async startProcess(projectId: string, specId: string): Promise<ProjectDescriptor> {
+    const project = this.find(projectId)
+    const descriptor = (await this.describeProcesses(project)).find((p) => p.id === specId)
+    if (!descriptor) throw new Error(`Unknown process "${specId}" for ${project.name}`)
+    if (descriptor.running) return this.describe(project)
+
+    const [rawBin, ...args] = descriptor.command.split(/\s+/)
+    if (!rawBin) throw new Error(`Empty command for ${descriptor.label}`)
+
+    // Resolve against the runtime the process declares, not the project's —
+    // a Laravel app's Vite build needs node while its queue worker needs php.
+    const env: Record<string, string> = {}
+    let extraDirs: string[] = []
+    if (descriptor.runtime && this.deps.runtimes.has(descriptor.runtime)) {
+      const resolved = await this.deps.runtimes
+        .resolve(descriptor.runtime, project.path)
+        .catch(() => null)
+      extraDirs = binDirOf(resolved?.binary ?? null)
+      if (extraDirs.length) env.PATH = `${extraDirs.join(':')}:${process.env.PATH ?? ''}`
+    }
+
+    const bin = resolveBinary(rawBin, extraDirs, { ...process.env, ...env })
+    if (!bin) {
+      throw new Error(
+        `Cannot find "${rawBin}" for ${descriptor.label}. Install ${descriptor.runtime ?? 'it'}, ` +
+          `or edit the command in the project settings.`
+      )
+    }
+
+    await this.deps.processes.spawn({
+      owner: { kind: 'project', id: project.id, role: specId },
+      label: `${project.name} · ${descriptor.label}`,
+      command: bin,
+      args,
+      cwd: project.path,
+      env,
+      // Tagged under the project, but distinguishable from its siblings.
+      logStream: specId
+    })
+    return this.emitChanged(project)
+  }
+
+  async stopProcess(projectId: string, specId: string): Promise<ProjectDescriptor> {
+    const handle = this.deps.processes.findByOwner('project', projectId, false, specId)
+    if (handle) await this.deps.processes.stop(handle.id)
+    return this.emitChanged(this.find(projectId))
+  }
+
+  /** Start every companion the user has enabled. */
+  async startEnabledProcesses(project: Project): Promise<void> {
+    for (const spec of await this.describeProcesses(project)) {
+      if (!spec.enabled || spec.running) continue
+      await this.startProcess(project.id, spec.id).catch((err: Error) =>
+        this.deps.logs.push(project.id, spec.id, `failed to start: ${err.message}`)
+      )
+    }
+  }
+
+  async stopAllProcesses(projectId: string): Promise<void> {
+    for (const handle of this.deps.processes.list()) {
+      if (handle.owner.kind === 'project' && handle.owner.id === projectId) {
+        await this.deps.processes.stop(handle.id)
+      }
+    }
+  }
+
   /** Start a project's dev server. FPM/static sites have nothing to start. */
   async start(id: string): Promise<ProjectDescriptor> {
     const project = this.find(id)
     if (project.serveModel !== 'reverse-proxy') {
       // Nothing to spawn for the site itself, but an fpm site is not servable
-      // until its pool is up.
+      // until its pool is up — and its companions are what "start" means here.
       await this.ensureFpmFor(project)
       await this.writeVhost(project)
+      await this.startEnabledProcesses(project)
       return this.emitChanged(project)
     }
 
-    const existing = this.deps.processes.findByOwner('project', id)
+    const existing = this.deps.processes.findByOwner('project', id, false, 'server')
     if (existing) return this.describe(project)
 
     const command = await this.resolveStartCommand(project)
@@ -496,7 +634,7 @@ export class ProjectManager extends EventEmitter {
     }
 
     const handle = await this.deps.processes.spawn({
-      owner: { kind: 'project', id },
+      owner: { kind: 'project', id, role: 'server' },
       label: project.domain,
       command: bin,
       args,
@@ -514,12 +652,14 @@ export class ProjectManager extends EventEmitter {
       })
     }
     await this.writeVhost(project)
+    await this.startEnabledProcesses(project)
     return this.emitChanged(project)
   }
 
   async stop(id: string): Promise<ProjectDescriptor> {
-    const handle = this.deps.processes.findByOwner('project', id)
-    if (handle) await this.deps.processes.stop(handle.id)
+    // Stops the server and every companion: leaving a queue worker running for
+    // a stopped site is a good way to be confused later.
+    await this.stopAllProcesses(id)
     return this.emitChanged(this.find(id))
   }
 
@@ -538,12 +678,14 @@ export class ProjectManager extends EventEmitter {
   // ── descriptors ─────────────────────────────────────────────────────────
 
   async describe(project: Project): Promise<ProjectDescriptor> {
-    const handle = this.deps.processes.findByOwner('project', project.id)
+    const handle = this.deps.processes.findByOwner('project', project.id, false, 'server')
     const serving = await this.servingState(project, handle?.state === 'running', handle?.pid ?? null)
     return {
       ...project,
       // Projects persisted before this field existed have no array.
       serviceIds: project.serviceIds ?? [],
+      processOverrides: project.processOverrides ?? {},
+      processes: await this.describeProcesses(project).catch(() => []),
       resolvedRuntime: await this.resolveRuntime(project).catch(() => null),
       resolvedStartCommand: await this.resolveStartCommand(project).catch(() => null),
       processId: handle?.id ?? null,
@@ -593,7 +735,7 @@ export class ProjectManager extends EventEmitter {
     // fpm: nginx can only reach the site if the pool it points at is listening.
     try {
       const version = await this.resolvePhpVersion(project)
-      if (!this.deps.fpm.isRunning(version)) {
+      if (!(await this.deps.fpm.isRunning(version))) {
         return { served: false, by: null, problem: `PHP-FPM ${version} pool is not running` }
       }
       return { served: true, by: `php-fpm ${version}`, problem: null }

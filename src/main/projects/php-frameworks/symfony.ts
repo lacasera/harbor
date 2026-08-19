@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { LogSource } from '../../../shared/logs.js'
-import type { NginxRewriteRule, PhpFrameworkDriver } from '../../../shared/project.js'
+import type {
+  NginxRewriteRule,
+  PhpFrameworkDriver,
+  ProjectProcessSpec
+} from '../../../shared/project.js'
+import { hasScript, readComposer } from './laravel.js'
 
 export class SymfonyDriver implements PhpFrameworkDriver {
   readonly id = 'symfony'
@@ -43,4 +48,42 @@ export class SymfonyDriver implements PhpFrameworkDriver {
   logSources(dir: string): LogSource[] {
     return [{ kind: 'dir', path: join(dir, 'var', 'log'), match: '\\.log$', label: 'symfony' }]
   }
+  async processes(dir: string): Promise<ProjectProcessSpec[]> {
+    const specs: ProjectProcessSpec[] = []
+    const composer = await readComposer(dir)
+
+    if ('symfony/messenger' in composer) {
+      specs.push({
+        id: 'messenger',
+        label: 'Messenger',
+        description: 'Consumes queued messages on the async transport',
+        command: 'php bin/console messenger:consume async',
+        runtime: 'php',
+        autoStart: true,
+        restart: 'on-failure'
+      })
+    }
+
+    // Encore and Vite are both common in Symfony; each has its own script.
+    for (const [script, label] of [
+      ['dev', 'Vite'],
+      ['watch', 'Encore watch']
+    ] as const) {
+      if (await hasScript(dir, script)) {
+        specs.push({
+          id: script === 'dev' ? 'vite' : 'encore',
+          label,
+          description: 'Frontend asset build',
+          command: `npm run ${script}`,
+          runtime: 'node',
+          autoStart: false,
+          restart: 'never'
+        })
+        break
+      }
+    }
+
+    return specs
+  }
+
 }

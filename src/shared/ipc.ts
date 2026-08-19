@@ -5,7 +5,12 @@ import type {
   ServiceDescriptor
 } from './service.js'
 import type { RuntimeDescriptor, ResolvedVersion, RuntimeId } from './runtime.js'
-import type { ProjectDescriptor, ProjectEnvFile, ProjectTypeId } from './project.js'
+import type {
+  ProjectDescriptor,
+  ProjectEnvFile,
+  ProjectProcessOverride,
+  ProjectTypeId
+} from './project.js'
 import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
@@ -113,6 +118,14 @@ export interface IpcContract {
   'projects:chooseDirectory': [[], string | null]
   /** The project's own .env, read from disk. */
   'projects:envFile': [[projectId: string], ProjectEnvFile]
+
+  /** Companion processes: queue workers, schedulers, asset builds. */
+  'projects:startProcess': [[projectId: string, specId: string], ProjectDescriptor]
+  'projects:stopProcess': [[projectId: string, specId: string], ProjectDescriptor]
+  'projects:updateProcess': [
+    [projectId: string, specId: string, patch: ProjectProcessOverride],
+    ProjectDescriptor
+  ]
 
   'processes:list': [[], ProcessHandle[]]
   'processes:stop': [[processId: string], void]

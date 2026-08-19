@@ -92,6 +92,11 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('projects:start', (id) => harbor.projects.start(id))
   handle('projects:stop', (id) => harbor.projects.stop(id))
   handle('projects:update', (id, patch) => harbor.projects.update(id, patch))
+  handle('projects:startProcess', (id, specId) => harbor.projects.startProcess(id, specId))
+  handle('projects:stopProcess', (id, specId) => harbor.projects.stopProcess(id, specId))
+  handle('projects:updateProcess', (id, specId, patch) =>
+    harbor.projects.updateProcess(id, specId, patch)
+  )
   handle('projects:envFile', async (projectId) =>
     readProjectEnv(harbor.projects.find(projectId).path)
   )

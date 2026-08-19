@@ -1,5 +1,6 @@
 import type { LogSource } from './logs.js'
-import type { ResolvedVersion, RuntimeRef } from './runtime.js'
+import type { ProcessState } from './process.js'
+import type { ResolvedVersion, RuntimeId, RuntimeRef } from './runtime.js'
 
 export type ServeModel = 'fpm' | 'reverse-proxy' | 'static'
 
@@ -33,6 +34,12 @@ export interface ProjectType {
    * Declared here so the aggregator never grows a branch per ecosystem.
    */
   logSources?(dir: string): LogSource[]
+  /**
+   * Auxiliary processes an application of this type needs. Detected from the
+   * project — a queue worker is pointless if the app has no queue — so the UI
+   * only ever offers things that make sense for what is actually there.
+   */
+  processes?(dir: string): Promise<ProjectProcessSpec[]>
 }
 
 /**
@@ -58,6 +65,8 @@ export interface PhpFrameworkDriver {
    * should not grow a branch per framework.
    */
   logSources?(dir: string): LogSource[]
+  /** Framework-specific companions: queue workers, schedulers, asset builds. */
+  processes?(dir: string): Promise<ProjectProcessSpec[]>
 }
 
 export interface Project {
@@ -80,12 +89,56 @@ export interface Project {
   startCommandOverride: string | null
   /** User-pinned runtime version; null means "resolve it". */
   runtimeOverride: RuntimeRef | null
+  /** Per-process user choices, keyed by spec id. */
+  processOverrides: Record<string, ProjectProcessOverride>
   /**
    * Services this project uses. Drives the aggregated .env block, so it is an
    * explicit choice rather than "whatever happens to be running".
    */
   serviceIds: string[]
   createdAt: number
+}
+
+export type ProcessRestart = 'never' | 'on-failure' | 'always'
+
+/**
+ * An auxiliary process a project needs alongside being served.
+ *
+ * A site is rarely one process: a Laravel app wants a queue worker, a
+ * scheduler and Vite; a Symfony app wants messenger. Drivers declare what an
+ * application of their kind needs, detected from the project rather than
+ * assumed, and the user decides which actually run.
+ */
+export interface ProjectProcessSpec {
+  /** Stable per project, e.g. "queue" — user settings key off it. */
+  id: string
+  label: string
+  description?: string
+  command: string
+  /** Which runtime provides the binary; resolved per project. */
+  runtime?: RuntimeId
+  /** Harbor's recommendation, not a decision. */
+  autoStart: boolean
+  restart: ProcessRestart
+  /** Set when the process binds a port that must be allocated and injected. */
+  portEnvVar?: string
+}
+
+/** A spec plus the user's choices and its live state. */
+export interface ProjectProcessDescriptor extends ProjectProcessSpec {
+  enabled: boolean
+  /** True when the command differs from what the driver detected. */
+  overridden: boolean
+  running: boolean
+  processId: string | null
+  pid: number | null
+  state: ProcessState
+}
+
+/** What the user changed about a detected process. */
+export interface ProjectProcessOverride {
+  enabled?: boolean
+  command?: string
 }
 
 export interface ProjectEnvVar {
@@ -118,5 +171,7 @@ export interface ProjectDescriptor extends Project {
   servedBy: string | null
   /** Why it isn't served, when it isn't. */
   servedProblem: string | null
+  /** Queue workers, schedulers, asset builds — detected and user-controlled. */
+  processes: ProjectProcessDescriptor[]
   url: string
 }

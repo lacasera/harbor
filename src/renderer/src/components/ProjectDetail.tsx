@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ProjectDescriptor, ProjectEnvFile } from '../../../shared/project.js'
+import type {
+  ProjectDescriptor,
+  ProjectEnvFile,
+  ProjectProcessDescriptor
+} from '../../../shared/project.js'
 import type { AnalysisResult } from '../../../shared/intelligence.js'
 import type { EnvBlock as EnvBlockData, ServiceDescriptor } from '../../../shared/service.js'
 import type { RuntimeDescriptor } from '../../../shared/runtime.js'
@@ -188,6 +192,7 @@ export function ProjectDetail({
             busy={busy}
             copied={copied}
             copy={copy}
+            onChanged={onChanged}
             onPatch={(patch) => void run(() => invoke('projects:update', project.id, patch))}
             onOpenServices={onOpenServices}
           />
@@ -240,6 +245,7 @@ function Overview({
   busy,
   copied,
   copy,
+  onChanged,
   onPatch,
   onOpenServices
 }: {
@@ -251,6 +257,7 @@ function Overview({
   busy: boolean
   copied: string | null
   copy: (text: string, key: string) => void
+  onChanged: (next: ProjectDescriptor) => void
   onPatch: (patch: {
     typeId?: string
     redetectType?: boolean
@@ -432,6 +439,8 @@ function Overview({
           </div>
         </div>
 
+        <ProcessesCard project={project} busy={busy} onChanged={onChanged} />
+
         <div className="card card-pad">
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Services</div>
           <div className="hint" style={{ marginBottom: 10 }}>
@@ -469,6 +478,124 @@ function Overview({
             Manage services →
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Queue workers, schedulers and asset builds. Detected per project, so this
+ * only ever offers what the application can actually use — an app on
+ * QUEUE_CONNECTION=sync is never asked whether it wants a worker.
+ */
+function ProcessesCard({
+  project,
+  busy,
+  onChanged
+}: {
+  project: ProjectDescriptor
+  busy: boolean
+  onChanged: (next: ProjectDescriptor) => void
+}): React.JSX.Element | null {
+  const [working, setWorking] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+
+  if (!project.processes.length) return null
+
+  const act = (id: string, fn: () => Promise<ProjectDescriptor>): void => {
+    setWorking(id)
+    setError(null)
+    void fn()
+      .then(onChanged)
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setWorking(null))
+  }
+
+  return (
+    <div className="card card-pad">
+      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Processes</div>
+      <div className="hint" style={{ marginBottom: 10 }}>
+        Started with the project when enabled
+      </div>
+
+      {error && <p className="error-text">{error}</p>}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {project.processes.map((p: ProjectProcessDescriptor) => (
+          <div key={p.id} className="proc-row">
+            <div className="proc-head">
+              <StatusDot status={p.running ? 'running' : p.state === 'crashed' ? 'error' : 'stopped'} small />
+              <span className="proc-label">{p.label}</span>
+              <div className="grow" />
+              <button
+                type="button"
+                className="btn xs"
+                disabled={busy || working === p.id}
+                onClick={() =>
+                  act(p.id, () =>
+                    invoke(p.running ? 'projects:stopProcess' : 'projects:startProcess', project.id, p.id)
+                  )
+                }
+              >
+                {working === p.id ? '…' : p.running ? 'Stop' : 'Start'}
+              </button>
+              <Toggle
+                on={p.enabled}
+                label={`Start ${p.label} with the project`}
+                disabled={busy || working === p.id}
+                onChange={(enabled) =>
+                  act(p.id, () =>
+                    invoke('projects:updateProcess', project.id, p.id, { enabled })
+                  )
+                }
+              />
+            </div>
+
+            {p.description && <div className="hint">{p.description}</div>}
+
+            {editing === p.id ? (
+              <div className="hstack" style={{ gap: 6, marginTop: 6 }}>
+                <input
+                  className="field-input mono"
+                  style={{ flex: 1 }}
+                  value={draft}
+                  autoFocus
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn xs"
+                  onClick={() => {
+                    setEditing(null)
+                    act(p.id, () =>
+                      invoke('projects:updateProcess', project.id, p.id, { command: draft })
+                    )
+                  }}
+                >
+                  Save
+                </button>
+                <button type="button" className="btn xs" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="proc-command"
+                title="Edit the command"
+                onClick={() => {
+                  setEditing(p.id)
+                  setDraft(p.command)
+                }}
+              >
+                {p.command}
+                {p.overridden && <span className="pill mono">edited</span>}
+              </button>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )

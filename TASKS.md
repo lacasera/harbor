@@ -301,6 +301,22 @@ Both are driver-shaped rather than framework-specific:
   exports, with credential-shaped keys masked and any key that would be
   overwritten flagged.
 
+## Companion processes
+
+A site is rarely one process. `ProjectType.processes(dir)` and
+`PhpFrameworkDriver.processes(dir)` declare what an application of their kind
+needs beside being served — queue workers, schedulers, asset builds — and the
+user decides which actually run.
+
+Everything is **detected, never assumed**: a queue worker is not offered on
+`QUEUE_CONNECTION=sync`, Horizon replaces `queue:work` rather than joining it,
+Reverb appears only if installed, and Vite only if there is a frontend build.
+Each spec names the runtime that provides its binary, so a Laravel app's Vite
+build resolves against node while its worker resolves against php.
+
+`ProcessOwner` gained a `role`, since a project now owns several processes and
+"is the site up?" must not be answered by its queue worker.
+
 ## Verification
 
 | Command | Covers |
@@ -310,6 +326,8 @@ Both are driver-shaped rather than framework-specific:
 | `npm run verify:service` | MinIO install/start/health/env/crash reporting (12 steps) |
 | `npm run verify:catalog` | all seven services' metadata, plus one native and one Docker service brought up (21 steps) |
 | `npm run verify:intelligence <app>` | analyzers against a real codebase (11 steps) |
+| `npm run verify:php` | fpm serving status and a full TLD round-trip (8 steps) |
+| `npm run verify:processes` | companion process detection and lifecycle (6 steps) |
 | `npm run doctor:release` | what is in place for a distributable build |
 
 ## Testing

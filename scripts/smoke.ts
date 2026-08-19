@@ -21,6 +21,7 @@ import { interpolate, defaultsFor, validate } from '../src/main/services/registr
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
 import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent-erd.js'
 import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js'
+import { LaravelDriver } from '../src/main/projects/php-frameworks/laravel.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
 import { readProjectEnv } from '../src/main/projects/env-file.js'
@@ -75,6 +76,7 @@ const baseProject = (over: Partial<Project>): Project => ({
   startCommandOverride: null,
   runtimeOverride: null,
   serviceIds: [],
+  processOverrides: {},
   createdAt: 0,
   ...over
 })
@@ -460,6 +462,50 @@ check('log stream labels keep the part that differs', () => {
   assert.equal(streamLabel('laravel', 'laravel.log'), 'laravel/laravel')
   assert.equal(streamLabel('laravel', 'laravel-2026-08-19.log'), 'laravel/laravel-2026-08-19')
   assert.equal(streamLabel(undefined, 'debug.log'), 'debug')
+})
+
+check('companion processes are detected, never assumed', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'harbor-proc-'))
+  mkdirSync(join(root, 'routes'), { recursive: true })
+  mkdirSync(join(root, 'public'), { recursive: true })
+  writeFileSync(join(root, 'artisan'), '')
+  writeFileSync(join(root, 'public', 'index.php'), '')
+  writeFileSync(join(root, 'routes', 'console.php'), '')
+
+  const driver = new LaravelDriver()
+  const ids = async (): Promise<string[]> => (await driver.processes(root)).map((p) => p.id)
+
+  // A sync queue runs jobs inline; offering a worker would be noise.
+  writeFileSync(join(root, '.env'), 'QUEUE_CONNECTION=sync\n')
+  writeFileSync(join(root, 'composer.json'), JSON.stringify({ require: {} }))
+  assert.deepEqual(await ids(), ['scheduler'])
+
+  // A real connection means a real worker.
+  writeFileSync(join(root, '.env'), 'QUEUE_CONNECTION=database\n')
+  assert.deepEqual(await ids(), ['queue', 'scheduler'])
+
+  // Horizon supersedes queue:work rather than joining it — running both would
+  // put two supervisors on the same jobs.
+  writeFileSync(
+    join(root, 'composer.json'),
+    JSON.stringify({ require: { 'laravel/horizon': '^5.0', 'laravel/reverb': '^1.0' } })
+  )
+  const withHorizon = await ids()
+  assert.ok(withHorizon.includes('horizon'))
+  assert.ok(!withHorizon.includes('queue'), 'horizon replaces the plain worker')
+  assert.ok(withHorizon.includes('reverb'))
+
+  // Vite only when there is actually a frontend build to run.
+  assert.ok(!withHorizon.includes('vite'))
+  writeFileSync(join(root, 'vite.config.js'), '')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }))
+  assert.ok((await ids()).includes('vite'))
+
+  // Each declares which runtime provides its binary — php for the worker,
+  // node for the asset build.
+  const specs = await driver.processes(root)
+  assert.equal(specs.find((p) => p.id === 'horizon')?.runtime, 'php')
+  assert.equal(specs.find((p) => p.id === 'vite')?.runtime, 'node')
 })
 
 check('a project .env is read as written, not interpreted', async () => {

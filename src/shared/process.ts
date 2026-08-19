@@ -7,6 +7,12 @@ export interface ProcessOwner {
   kind: ProcessOwnerKind
   /** service id, project id, or a system component name */
   id: string
+  /**
+   * Which of the owner's processes this is: "server" for the thing nginx
+   * proxies to, or a spec id like "queue". A project runs several at once, so
+   * the owner id alone no longer identifies one.
+   */
+  role?: string
 }
 
 export interface SpawnRequest {
@@ -24,6 +30,12 @@ export interface SpawnRequest {
   portEnvVar?: string
   /** Preferred port when allocating for the first time. */
   preferredPort?: number
+  /**
+   * Stream name for the log viewer. Defaults to stdout/stderr; a project's
+   * companions set it so "queue" and "vite" are distinguishable under the one
+   * project source.
+   */
+  logStream?: string
 }
 
 /** Serializable view of a managed process. Safe to send over IPC. */

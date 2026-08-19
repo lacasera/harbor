@@ -1,7 +1,12 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { LogSource, ProjectType, RuntimeRef } from '../../../shared/index.js'
+import type {
+  LogSource,
+  ProjectType,
+  ProjectProcessSpec,
+  RuntimeRef
+} from '../../../shared/index.js'
 
 /**
  * Anything that binds a port: Express, Nest, Vite dev server, Nitro. Served
@@ -66,6 +71,43 @@ export class NodeServerProjectType implements ProjectType {
    */
   logSources(dir: string): LogSource[] {
     return [{ kind: 'dir', path: join(dir, 'logs'), match: '\\.(log|ndjson)$', label: 'app' }]
+  }
+
+  /**
+   * The dev server itself is the project's start command, not a companion.
+   * These are the extra long-running scripts apps conventionally define.
+   */
+  async processes(dir: string): Promise<ProjectProcessSpec[]> {
+    const pkgPath = join(dir, 'package.json')
+    if (!existsSync(pkgPath)) return []
+
+    let scripts: Record<string, string> = {}
+    try {
+      scripts = (JSON.parse(await readFile(pkgPath, 'utf8')) as { scripts?: Record<string, string> })
+        .scripts ?? {}
+    } catch {
+      return []
+    }
+
+    const runner = existsSync(join(dir, 'bun.lockb')) || existsSync(join(dir, 'bun.lock'))
+      ? 'bun run'
+      : existsSync(join(dir, 'pnpm-lock.yaml'))
+        ? 'pnpm run'
+        : existsSync(join(dir, 'yarn.lock'))
+          ? 'yarn'
+          : 'npm run'
+
+    return (['worker', 'queue', 'scheduler', 'watch'] as const)
+      .filter((name) => scripts[name])
+      .map((name) => ({
+        id: name,
+        label: name[0]!.toUpperCase() + name.slice(1),
+        description: `package.json script "${name}"`,
+        command: `${runner} ${name}`,
+        runtime: 'node' as const,
+        autoStart: false,
+        restart: 'on-failure' as const
+      }))
   }
 
 }
