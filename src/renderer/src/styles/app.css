@@ -825,7 +825,7 @@
   align-items: flex-start;
   gap: 11px;
 }
-.svc-tile {
+.brand-tile {
   flex: none;
   border-radius: 9px;
   display: flex;
@@ -1345,17 +1345,10 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--ln);
 }
-.rt-mono {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.rt-mono-text {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  color: #fff;
 }
 .rt-version {
   display: grid;

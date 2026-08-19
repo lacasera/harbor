@@ -1,6 +1,7 @@
 import type { ServiceIconKind } from '../../../shared/service.js'
 import { monogramsFor } from './primitives.js'
-import { SERVICE_LOGOS } from './service-logos.js'
+import { brandLogo } from './brand-logos.js'
+import { BrandTile } from './BrandIcon.js'
 
 /**
  * Service tiles.
@@ -10,16 +11,6 @@ import { SERVICE_LOGOS } from './service-logos.js'
  * driver that ships neither a logo nor an icon still renders something
  * legible rather than an empty square.
  */
-/** True for hexes dark enough to disappear against a dark panel. */
-function isTooDark(colour: string): boolean {
-  const hex = /^#([0-9a-f]{6})$/i.exec(colour.trim())
-  if (!hex?.[1]) return false
-  const n = parseInt(hex[1], 16)
-  // Rec. 601 luma, which tracks perceived brightness better than a mean.
-  const luma = 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)
-  return luma < 60
-}
-
 function Glyph({ kind }: { kind: ServiceIconKind }): React.JSX.Element {
   const stroke = {
     fill: 'none',
@@ -117,60 +108,27 @@ export function ServiceIcon({
   catalogue: string[]
   size?: number
 }): React.JSX.Element {
-  // Some official marks are near-black (Kafka), which is correct on a light
-  // background and invisible on a dark one. Those use the theme's own text
-  // colour, which is near-black in light and near-white in dark — so the mark
-  // stays true where it can be and readable where it cannot.
-  const declared = tint ?? 'var(--tx3)'
-  const colour = isTooDark(declared) ? 'var(--tx)' : declared
-  const logo = SERVICE_LOGOS[id]
-
-  const tile = {
-    width: size,
-    height: size,
-    // A tinted wash with a matching border, not a solid block: seven saturated
-    // squares in a grid compete for attention and none of them wins.
-    background: `color-mix(in srgb, ${colour} 16%, transparent)`,
-    border: `1px solid color-mix(in srgb, ${colour} 38%, transparent)`,
-    color: colour
-  }
-
-  if (logo) {
+  // Official mark → category glyph → monogram. A driver that ships none of
+  // them still renders something legible rather than an empty square.
+  if (brandLogo(id) || icon) {
     return (
-      <div className="svc-tile" style={tile} title={logo.title}>
-        <svg
-          width={Math.round(size * 0.56)}
-          height={Math.round(size * 0.56)}
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          role="img"
-          aria-label={logo.title}
-        >
-          <path d={logo.path} />
-        </svg>
-      </div>
-    )
-  }
-
-  if (icon) {
-    return (
-      <div className="svc-tile" style={tile} title={displayName}>
+      <BrandTile id={id} size={size} fallbackTint={tint}>
         <svg
           width={Math.round(size * 0.55)}
           height={Math.round(size * 0.55)}
           viewBox="0 0 14 14"
           aria-hidden
         >
-          <Glyph kind={icon} />
+          <Glyph kind={icon ?? 'generic'} />
         </svg>
-      </div>
+      </BrandTile>
     )
   }
 
   return (
     <div
-      className="svc-tile"
-      style={{ width: size, height: size, background: colour, color: '#fff' }}
+      className="brand-tile"
+      style={{ width: size, height: size, background: tint ?? 'var(--tx3)', color: '#fff' }}
     >
       {monogramsFor(catalogue).get(displayName) ?? displayName.slice(0, 1)}
     </div>

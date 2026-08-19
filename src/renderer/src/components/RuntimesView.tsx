@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { RuntimeDescriptor, RuntimeId } from '../../../shared/runtime.js'
 import type { ProjectDescriptor } from '../../../shared/project.js'
 import { invoke } from '../ipc/client.js'
-import { tintFor } from './primitives.js'
+import { BrandTile } from './BrandIcon.js'
 
 export function RuntimesView({
   runtimes,
@@ -74,9 +74,9 @@ export function RuntimesView({
             return (
               <div key={runtime.id} className="card">
                 <div className="runtime-head">
-                  <div className="rt-mono" style={{ background: tintFor(runtime.id) }}>
-                    {runtime.displayName.slice(0, 4)}
-                  </div>
+                  <BrandTile id={runtime.id} size={28}>
+                    <span className="rt-mono-text">{runtime.displayName.slice(0, 4)}</span>
+                  </BrandTile>
                   <span style={{ fontSize: 13.5, fontWeight: 600 }}>{runtime.displayName}</span>
                   <span className="small muted" style={{ fontSize: 12 }}>
                     {runtime.installedVersions.length}{' '}

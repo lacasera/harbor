@@ -1,70 +1,158 @@
 /**
- * Regenerate src/renderer/src/components/service-logos.ts from Simple Icons.
+ * Regenerate src/renderer/src/components/brand-logos.ts from Simple Icons.
  *
  *   npm run logos
  *
  * Vendoring rather than fetching at runtime is deliberate: a local development
  * tool that needs a CDN to draw its own icons is broken on a plane.
+ *
+ * Keyed by Harbor's own ids, not the upstream slugs, so lookups read naturally
+ * at the call sites — a project type is "node-server", a runtime is "node".
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** Harbor service id → Simple Icons slug. */
+/** Harbor id → Simple Icons slug. */
 const SLUGS: Record<string, string> = {
+  // Services
   minio: 'minio',
   meilisearch: 'meilisearch',
   rabbitmq: 'rabbitmq',
   elasticsearch: 'elasticsearch',
   opensearch: 'opensearch',
-  kafka: 'apachekafka'
+  kafka: 'apachekafka',
+  // Runtimes
+  node: 'nodedotjs',
+  bun: 'bun',
+  deno: 'deno',
+  php: 'php',
+  // Project types and PHP frameworks
+  laravel: 'laravel',
+  symfony: 'symfony',
+  wordpress: 'wordpress',
+  go: 'go'
+}
+
+/** Ids that should render under the same mark. */
+const ALIASES: Record<string, string> = {
+  'node-server': 'node',
+  plain: 'php'
+}
+
+/**
+ * Brand colours for icons that no longer ship a per-icon .js module, which is
+ * where Simple Icons publishes the hex. The SVG carries only the path, so
+ * these are recorded here rather than guessed at generation time.
+ */
+const HEX_FALLBACK: Record<string, string> = {
+  minio: '#C72E49',
+  meilisearch: '#FF5CAA',
+  bun: '#FBF0DF'
+}
+
+interface Fetched {
+  title: string
+  hex: string
+  path: string
+}
+
+async function get(url: string): Promise<string | null> {
+  const res = await fetch(url)
+  if (!res.ok) return null
+  const body = await res.text()
+  // jsDelivr answers 200 with a plain-text apology for missing files, so an
+  // ok status is not enough to know the fetch succeeded.
+  if (body.startsWith("Couldn't find")) return null
+  return body
+}
+
+async function fetchIcon(slug: string): Promise<Fetched | null> {
+  const base = `https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/${slug}`
+
+  // The .js module carries the brand hex; not every icon still ships one.
+  const module_ = await get(`${base}.js`)
+  if (module_) {
+    const title = /title:"((?:[^"\\]|\\.)*)"/.exec(module_)?.[1]
+    const hex = /hex:"([0-9A-Fa-f]{6})"/.exec(module_)?.[1]
+    const path = /path:"((?:[^"\\]|\\.)*)"/.exec(module_)?.[1]
+    if (title && hex && path) return { title, hex: `#${hex}`, path: path.replace(/\\"/g, '"') }
+  }
+
+  const svg = await get(`${base}.svg`)
+  if (!svg) return null
+  const title = /<title>([^<]+)<\/title>/.exec(svg)?.[1]
+  const path = /<path d="([^"]+)"/.exec(svg)?.[1]
+  const hex = HEX_FALLBACK[slug]
+  if (!title || !path || !hex) return null
+
+  return { title, hex, path }
 }
 
 async function main(): Promise<void> {
   const entries: string[] = []
 
-  for (const [service, slug] of Object.entries(SLUGS)) {
-    const res = await fetch(`https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/${slug}.svg`)
-    if (!res.ok) {
-      console.log(`  skip ${service}: HTTP ${res.status}`)
-      continue
-    }
-    const svg = await res.text()
-    const title = /<title>([^<]+)<\/title>/.exec(svg)?.[1] ?? service
-    const path = /<path d="([^"]+)"/.exec(svg)?.[1]
-    if (!path) {
-      console.log(`  skip ${service}: no single path`)
+  for (const [id, slug] of Object.entries(SLUGS)) {
+    const icon = await fetchIcon(slug)
+    if (!icon) {
+      console.log(`  skip ${id} (${slug})`)
       continue
     }
     entries.push(
-      `  ${service}: {\n    title: ${JSON.stringify(title)},\n    path: ${JSON.stringify(path)}\n  },`
+      `  ${JSON.stringify(id)}: {\n` +
+        `    title: ${JSON.stringify(icon.title)},\n` +
+        `    hex: ${JSON.stringify(icon.hex)},\n` +
+        `    path: ${JSON.stringify(icon.path)}\n  },`
     )
-    console.log(`  ok   ${service} (${path.length} chars)`)
+    console.log(`  ok   ${id.padEnd(14)} ${icon.hex}  ${icon.path.length} chars`)
   }
 
-  const file = join(process.cwd(), 'src/renderer/src/components/service-logos.ts')
-  const header = `/**
- * Official service marks, as single-path 24×24 SVGs.
+  const aliases = Object.entries(ALIASES)
+    .map(([from, to]) => `  ${JSON.stringify(from)}: ${JSON.stringify(to)},`)
+    .join('\n')
+
+  const file = join(process.cwd(), 'src/renderer/src/components/brand-logos.ts')
+  writeFileSync(
+    file,
+    `/**
+ * Official marks for the services, runtimes and frameworks Harbor manages.
  *
- * Vendored from Simple Icons (https://simple-icons.org, CC0-1.0) rather than
- * fetched at runtime: an app that phones a CDN to draw its own UI breaks
- * offline, which is the one place a local development tool must work.
+ * Vendored from Simple Icons (https://simple-icons.org, CC0-1.0) as
+ * single-path 24×24 SVGs rather than fetched at runtime: an app that phones a
+ * CDN to draw its own UI breaks offline, which is the one place a local
+ * development tool has to work.
  *
- * The marks themselves remain the trademarks of their respective owners and
- * are used here to identify those projects. Anything without an official mark
- * available falls back to the category glyph in ServiceIcon.
+ * The marks remain the trademarks of their respective owners and are used here
+ * to identify those projects. Anything without an official mark falls back to
+ * a category glyph, then to a monogram.
  *
- * Regenerate with: npm run logos
+ * Generated by scripts/fetch-logos.ts — run \`npm run logos\` to refresh.
  */
-export interface ServiceLogo {
+export interface BrandLogo {
   title: string
-  /** Single path, 24×24 viewBox, filled with the service's tint. */
+  /** Official brand colour. */
+  hex: string
+  /** Single path, 24×24 viewBox. */
   path: string
 }
 
-export const SERVICE_LOGOS: Record<string, ServiceLogo> = {
-`
-  writeFileSync(file, `${header}${entries.join('\n')}\n}\n`, 'utf8')
-  console.log(`\nwrote ${entries.length} marks to service-logos.ts`)
+export const BRAND_LOGOS: Record<string, BrandLogo> = {
+${entries.join('\n')}
+}
+
+/** Ids that share another's mark. */
+const ALIASES: Record<string, string> = {
+${aliases}
+}
+
+/** The mark for a Harbor id, following aliases. */
+export function brandLogo(id: string | null | undefined): BrandLogo | null {
+  if (!id) return null
+  return BRAND_LOGOS[ALIASES[id] ?? id] ?? null
+}
+`,
+    'utf8'
+  )
+  console.log(`\nwrote ${entries.length} marks`)
 }
 
 void main()

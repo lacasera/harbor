@@ -1,11 +1,13 @@
 /**
  * Framework and project-type marks.
  *
- * These are simple geometric glyphs in each ecosystem's colour, not the real
- * trademarked logos — recognisable at 14px, and ours to ship. A project's
- * framework driver wins over its broader type, so a Laravel site reads as
- * Laravel rather than generically PHP.
+ * The official mark where one exists (see brand-logos.ts), otherwise a simple
+ * geometric glyph in that ecosystem's colour. A project's framework driver
+ * wins over its broader type, so a Laravel site reads as Laravel rather than
+ * generically PHP.
  */
+import { brandLogo } from './brand-logos.js'
+import { BrandMark } from './BrandIcon.js'
 
 const COLORS: Record<string, string> = {
   laravel: '#FF2D20',
@@ -113,6 +115,10 @@ export function TypeIcon({
   // The framework driver is the more specific answer when there is one, but
   // "plain" says nothing a reader wants — fall back to the type there.
   const id = frameworkId && frameworkId !== 'plain' ? frameworkId : typeId
+
+  const mark = brandLogo(id) ? <BrandMark id={id} size={size} /> : null
+  if (mark) return mark
+
   return (
     <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden style={{ flex: 'none' }}>
       <Glyph id={id} color={typeColor(id)} />
