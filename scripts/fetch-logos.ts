@@ -21,6 +21,11 @@ const SLUGS: Record<string, string> = {
   elasticsearch: 'elasticsearch',
   opensearch: 'opensearch',
   kafka: 'apachekafka',
+  mysql: 'mysql',
+  mariadb: 'mariadb',
+  postgres: 'postgresql',
+  mongodb: 'mongodb',
+  redis: 'redis',
   // Runtimes
   node: 'nodedotjs',
   bun: 'bun',

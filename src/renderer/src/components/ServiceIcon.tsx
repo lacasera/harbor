@@ -80,6 +80,14 @@ function Glyph({ kind }: { kind: ServiceIconKind }): React.JSX.Element {
           <path d="M5.4 6 L7.2 7 L5.4 8 M8.4 8 H10" {...stroke} />
         </>
       )
+    // Mail: an envelope.
+    case 'mail':
+      return (
+        <>
+          <rect x="1.8" y="3.4" width="10.4" height="7.2" rx="1.2" {...stroke} />
+          <path d="M2.4 4.2 L7 7.8 L11.6 4.2" {...stroke} />
+        </>
+      )
     default:
       return (
         <>

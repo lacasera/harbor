@@ -20,6 +20,7 @@ export type ServiceIconKind =
   | 'cloud'
   | 'database'
   | 'cache'
+  | 'mail'
   | 'generic'
 
 export type ServiceHealth = 'stopped' | 'starting' | 'running' | 'unhealthy' | 'error'
@@ -65,6 +66,12 @@ export interface ServiceDriver {
   availableVersions(): Promise<string[]>
   installedVersions(): Promise<string[]>
   install(version: string): Promise<void>
+  /**
+   * Ports this service will actually bind, given its live config. Defaults to
+   * `defaultPorts`; drivers whose schema renames or adds ports override it so
+   * Harbor can check for conflicts before starting.
+   */
+  configuredPorts?(config: ServiceConfig): number[]
   start(config: ServiceConfig): Promise<ProcessHandle>
   stop(): Promise<void>
   healthCheck(): Promise<ServiceStatus>

@@ -87,6 +87,13 @@ export class RabbitMqDriver implements ServiceDriver {
     }
   }
 
+  configuredPorts(config: ServiceConfig): number[] {
+    return [
+      Number(config.values.port ?? 5672),
+      Number(config.values.managementPort ?? 15672)
+    ]
+  }
+
   async start(config: ServiceConfig): Promise<ProcessHandle> {
     this.running = config
     return this.docker.start({

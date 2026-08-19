@@ -113,6 +113,10 @@ export class MinioDriver implements ServiceDriver {
     chmodSync(target, 0o755)
   }
 
+  configuredPorts(config: ServiceConfig): number[] {
+    return [Number(config.values.port ?? 9000), Number(config.values.consolePort ?? 9001)]
+  }
+
   async start(config: ServiceConfig): Promise<ProcessHandle> {
     const versions = await this.installedVersions()
     const version = versions.includes(config.version) ? config.version : versions[0]

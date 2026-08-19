@@ -1,3 +1,4 @@
+import { connect } from 'node:net'
 import type { JSONSchema } from '../../shared/json-schema.js'
 import type { LogSource } from '../../shared/logs.js'
 import type { ProcessHandle } from '../../shared/process.js'
@@ -33,6 +34,18 @@ export interface DockerServiceSpec {
    * alone only proves the process exists, not that the service is ready.
    */
   healthPath?: string
+  /**
+   * Probe the first port with a TCP connect instead. Databases speak their own
+   * protocols, so an HTTP request proves nothing — but accepting a connection
+   * does distinguish "booting" from "ready", which container state cannot.
+   */
+  healthTcp?: boolean
+  /**
+   * Which of `defaultPorts` the health probe targets. Defaults to the first,
+   * which is not always right: Mailpit's first port is SMTP because that is
+   * what projects connect to, but only its second port speaks HTTP.
+   */
+  healthPortIndex?: number
   /** Treated as healthy; some services return 503 while still usable locally. */
   healthAcceptStatuses?: number[]
 }
@@ -116,6 +129,20 @@ export class DockerServiceDriver implements ServiceDriver {
     this.running = null
   }
 
+  private portAccepts(port: number): Promise<boolean> {
+    return portAccepts(port)
+  }
+
+  configuredPorts(config: ServiceConfig): number[] {
+    const values = config.values ?? {}
+    const primary = Number(values.port ?? this.spec.defaultPorts[0])
+    const rest = this.spec.defaultPorts.slice(1).map((p, i) => {
+      const key = ['secondaryPort', 'tertiaryPort'][i]
+      return key && values[key] !== undefined ? Number(values[key]) : p
+    })
+    return [primary, ...rest]
+  }
+
   private ports(): number[] {
     const values = this.running?.values ?? {}
     const primary = Number(values.port ?? this.spec.defaultPorts[0])
@@ -136,6 +163,18 @@ export class DockerServiceDriver implements ServiceDriver {
     }
 
     const ports = this.ports()
+
+    const healthPort = ports[this.spec.healthPortIndex ?? 0] ?? (ports[0] as number)
+
+    if (this.spec.healthTcp) {
+      const open = await this.portAccepts(healthPort)
+      // A container that is up but not yet listening is starting, not broken:
+      // Postgres and MySQL both take seconds to initialise on first run.
+      return open
+        ? { health: 'running', ports, detail: `accepting connections on :${healthPort}` }
+        : { health: 'starting', ports, detail: 'container up, waiting for the port' }
+    }
+
     if (!this.spec.healthPath) {
       return { health: 'running', ports, detail: `container ${lower}` }
     }
@@ -143,7 +182,7 @@ export class DockerServiceDriver implements ServiceDriver {
     // The container can be up long before the service answers; that window is
     // 'starting', not 'unhealthy', or every start would flash red.
     try {
-      const res = await fetch(`http://127.0.0.1:${ports[0]}${this.spec.healthPath}`, {
+      const res = await fetch(`http://127.0.0.1:${healthPort}${this.spec.healthPath}`, {
         signal: AbortSignal.timeout(2000)
       })
       const accepted = this.spec.healthAcceptStatuses ?? []
@@ -155,6 +194,25 @@ export class DockerServiceDriver implements ServiceDriver {
       return { health: 'starting', ports, detail: 'container up, waiting for the service' }
     }
   }
+}
+
+/** Does anything accept a TCP connection on this port? */
+function portAccepts(port: number, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    let done = false
+    const settle = (value: boolean): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(value)
+    }
+    // Cancelled on settle: a timer left running would overwrite a good result.
+    const timer = setTimeout(() => settle(false), timeoutMs)
+    socket.once('connect', () => settle(true))
+    socket.once('error', () => settle(false))
+  })
 }
 
 /** Port field shared by every Docker service's schema. */

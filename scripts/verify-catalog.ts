@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   const harbor = new HarborApp()
   const descriptors = await harbor.services.describeAll()
 
-  step('catalogue registered', descriptors.length === 7, `${descriptors.length} services`)
+  step('catalogue registered', descriptors.length === 13, `${descriptors.length} services`)
 
   // Metadata contract every driver must satisfy for the generated UI to work.
   for (const d of descriptors) {
@@ -43,7 +43,9 @@ async function main(): Promise<void> {
   // Every service must produce a resolvable .env block from its own hints.
   for (const d of descriptors) {
     const block = await harbor.services.envBlock(d.id)
-    const unresolved = block.vars.filter((v) => v.value.includes('${') || v.value === '')
+    // Only a leftover placeholder is a bug. An empty value is often the right
+    // answer — MAIL_USERNAME= and an unauthenticated Redis both want one.
+    const unresolved = block.vars.filter((v) => v.value.includes('${'))
     step(
       `${d.id}: env block resolves`,
       unresolved.length === 0 && block.vars.length > 0,
@@ -81,23 +83,47 @@ async function main(): Promise<void> {
     step('docker available', false, available.reason ?? '')
   } else {
     step('docker available', true)
-    try {
-      console.log('  ..   starting LocalStack (pulls the image on first run)…')
-      await harbor.services.start('localstack')
-      const driver = harbor.services.get('localstack')
-
-      let health = await driver.healthCheck()
-      for (let i = 0; i < 60 && health.health !== 'running'; i++) {
-        await wait(1000)
-        health = await driver.healthCheck()
+    // One TCP-probed service and one HTTP-probed one: the two readiness paths
+    // a Docker driver can take, exercised for real rather than assumed.
+    for (const id of ['postgres', 'mailpit']) {
+      try {
+        console.log(`  ..   starting ${id} (pulls the image on first run)…`)
+        await harbor.services.start(id)
+      } catch (err) {
+        // A port already held by something else is a fact about this machine,
+        // not a defect in the driver — and Harbor refusing to start onto it is
+        // the behaviour under test elsewhere.
+        const message = (err as Error).message
+        if (message.includes('is held by')) {
+          console.log(`  ..   ${id} skipped: ${message}`)
+          continue
+        }
+        throw err
       }
-      step('localstack healthy', health.health === 'running', health.detail ?? health.error ?? '')
-      step(
-        'localstack logs reach the aggregator',
-        harbor.logs.query({ sources: ['localstack'], limit: 20 }).length > 0
-      )
-    } finally {
-      await harbor.services.stop('localstack').catch(() => undefined)
+
+      try {
+        const driver = harbor.services.get(id)
+
+        let health = await driver.healthCheck()
+        for (let i = 0; i < 90 && health.health !== 'running'; i++) {
+          await wait(1000)
+          health = await driver.healthCheck()
+        }
+        step(`${id} healthy`, health.health === 'running', health.detail ?? health.error ?? '')
+        step(
+          `${id} logs reach the aggregator`,
+          harbor.logs.query({ sources: [id], limit: 20 }).length > 0
+        )
+
+        const block = await harbor.services.envBlock(id)
+        step(
+          `${id} env carries live values`,
+          block.vars.every((v) => !v.value.includes('${')),
+          block.vars.map((v) => v.key).join(', ')
+        )
+      } finally {
+        await harbor.services.stop(id).catch(() => undefined)
+      }
     }
   }
 

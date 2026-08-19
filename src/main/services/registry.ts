@@ -13,6 +13,7 @@ import type { JSONSchema } from '../../shared/json-schema.js'
 import type { ConfigStore } from '../core/config-store.js'
 import type { LogAggregator } from '../core/log-aggregator.js'
 import type { ProcessManager } from '../core/process-manager.js'
+import { portHolder } from '../core/port-holder.js'
 
 /**
  * Holds every ServiceDriver and is the only thing the IPC layer talks to.
@@ -169,7 +170,29 @@ export class ServiceRegistry extends EventEmitter {
 
   async start(id: string): Promise<ServiceDescriptor> {
     const driver = this.get(id)
-    await driver.start(this.configFor(id))
+    const config = this.configFor(id)
+
+    // Refuse to start onto a port something else already holds. Docker binds
+    // 0.0.0.0 while a local process may hold 127.0.0.1, and the more specific
+    // bind wins — so the container starts, looks fine, and every request
+    // (including Harbor's own health check) reaches the other process instead.
+    const current = await this.statusOf(id, true)
+    if (current.health !== 'running') {
+      const wanted = driver.configuredPorts?.(config) ?? driver.defaultPorts
+      const conflicts: string[] = []
+      for (const port of wanted) {
+        const holder = await portHolder(port)
+        if (holder) conflicts.push(`:${port} is held by ${holder}`)
+      }
+      if (conflicts.length) {
+        throw new Error(
+          `Cannot start ${driver.displayName} — ${conflicts.join(', ')}. ` +
+            `Stop it, or change the port in this service's settings.`
+        )
+      }
+    }
+
+    await driver.start(config)
     this.logs.attach(id, driver.logSources)
     return this.emitChanged(id)
   }
@@ -262,7 +285,12 @@ function samePorts(a: ServiceStatus, b: ServiceStatus): boolean {
 }
 
 export function interpolate(template: string, scope: Record<string, unknown>): string {
-  return template.replace(/\$\{(\w+)\}/g, (_m, key: string) => {
+  return template.replace(/\$\{(\w+)\}/g, (match: string, key: string) => {
+    // An absent key keeps its placeholder rather than collapsing to an empty
+    // string. Collapsing made a typo in a driver's envHints indistinguishable
+    // from a value that is deliberately blank — and blank is correct for
+    // plenty of them: Mailpit wants MAIL_USERNAME= and Redis wants no password.
+    if (!(key in scope)) return match
     const value = scope[key]
     return value === undefined || value === null ? '' : String(value)
   })

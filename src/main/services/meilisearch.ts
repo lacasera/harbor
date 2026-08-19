@@ -115,6 +115,10 @@ export class MeilisearchDriver implements ServiceDriver {
     chmodSync(target, 0o755)
   }
 
+  configuredPorts(config: ServiceConfig): number[] {
+    return [Number(config.values.port ?? 7700)]
+  }
+
   async start(config: ServiceConfig): Promise<ProcessHandle> {
     const versions = await this.installedVersions()
     const version = versions.includes(config.version) ? config.version : versions[0]

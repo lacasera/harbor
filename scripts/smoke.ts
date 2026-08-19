@@ -245,6 +245,15 @@ check('framework detection prefers specific over generic', async () => {
   assert.equal((await registry.detect(plain)).id, 'plain')
 })
 
+check('an unknown env placeholder stays visible instead of vanishing', () => {
+  // A driver typo used to render as an empty value, which looks identical to a
+  // value that is deliberately blank.
+  assert.equal(interpolate('http://${host}:${port}', { host: 'x', port: 1 }), 'http://x:1')
+  assert.equal(interpolate('${passwrd}', { password: 'secret' }), '${passwrd}')
+  // Present-but-empty is a real answer and must still render as empty.
+  assert.equal(interpolate('${password}', { password: '' }), '')
+})
+
 check('env hints interpolate against live config, not schema defaults', () => {
   const minio = new MinioDriver({} as never, {} as never)
   const scope = { ...defaultsFor(minio.configSchema), host: '127.0.0.1', port: 9555 }

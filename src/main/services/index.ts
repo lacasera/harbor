@@ -7,6 +7,7 @@ import { MeilisearchDriver } from './meilisearch.js'
 import { RabbitMqDriver } from './rabbitmq.js'
 import { DockerServiceDriver } from './docker-service.js'
 import { ELASTICSEARCH, KAFKA, LOCALSTACK, OPENSEARCH } from './docker-catalog.js'
+import { MAILPIT, MARIADB, MONGODB, MYSQL, POSTGRES, REDIS } from './data-catalog.js'
 
 /**
  * The service catalogue. Adding one is a driver (or, for Docker services, a
@@ -22,7 +23,19 @@ export function registerServices(
 
   // Docker: heavier, JVM-shaped, or awkward to install natively.
   registry.register(new RabbitMqDriver(deps.docker))
-  for (const spec of [ELASTICSEARCH, OPENSEARCH, LOCALSTACK, KAFKA]) {
+  for (const spec of [
+    // Data stores first — they are what most projects reach for.
+    MYSQL,
+    MARIADB,
+    POSTGRES,
+    MONGODB,
+    REDIS,
+    MAILPIT,
+    ELASTICSEARCH,
+    OPENSEARCH,
+    LOCALSTACK,
+    KAFKA
+  ]) {
     registry.register(new DockerServiceDriver(deps.docker, spec))
   }
 }
