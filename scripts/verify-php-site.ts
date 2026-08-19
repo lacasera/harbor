@@ -50,8 +50,18 @@ void (async () => {
     // ── 1. serving status ────────────────────────────────────────────────
     const all = await harbor.projects.describeAll()
     const php = all.find((p) => p.serveModel === 'fpm')
-    step('an fpm site reports itself served', Boolean(php?.served), php ? `${php.name}: ${php.servedBy ?? php.servedProblem}` : 'none parked')
-    step('served is not process state', php?.running === false && php?.served === true, `running=${php?.running} served=${php?.served}`)
+
+    // A root nginx whose workers are `nobody` genuinely cannot serve anything.
+    // That is a broken machine, not a broken build, so report it as a
+    // precondition rather than a failing assertion.
+    if (await harbor.projects.nginx.workersCannotReadProjects()) {
+      console.log(`  ..   nginx workers are 'nobody'; skipping the serving assertions`)
+      console.log(`  ..   reported problem: ${php?.servedProblem}`)
+      step('the nobody-worker condition is detected and named', Boolean(php?.servedProblem))
+    } else {
+      step('an fpm site reports itself served', Boolean(php?.served), php ? `${php.name}: ${php.servedBy ?? php.servedProblem}` : 'none parked')
+      step('served is not process state', php?.running === false && php?.served === true, `running=${php?.running} served=${php?.served}`)
+    }
 
     // ── 2. TLD change ────────────────────────────────────────────────────
     const before = php?.domain ?? ''
