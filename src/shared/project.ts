@@ -1,3 +1,4 @@
+import type { LogSource } from './logs.js'
 import type { ResolvedVersion, RuntimeRef } from './runtime.js'
 
 export type ServeModel = 'fpm' | 'reverse-proxy' | 'static'
@@ -25,6 +26,13 @@ export interface ProjectType {
   /** null for FPM-served PHP — nginx talks to the pool, nothing to spawn. */
   startCommand(dir: string): Promise<string | null>
   defaultPort?: number
+  /**
+   * Where an application of this type writes its own logs, beyond whatever it
+   * prints to stdout. Only the type knows: a Node server usually logs to
+   * stdout, a PHP app to a file its framework chooses, a Go service to either.
+   * Declared here so the aggregator never grows a branch per ecosystem.
+   */
+  logSources?(dir: string): LogSource[]
 }
 
 /**
@@ -44,6 +52,12 @@ export interface PhpFrameworkDriver {
   rewrites(dir: string): NginxRewriteRule[]
   /** Optional per-site PHP version pin (Valet parity). */
   isolatedPhpVersion?(dir: string): Promise<string | null>
+  /**
+   * Where this framework writes its application log. Declared per driver for
+   * the same reason serving is: only the framework knows, and the aggregator
+   * should not grow a branch per framework.
+   */
+  logSources?(dir: string): LogSource[]
 }
 
 export interface Project {
@@ -72,6 +86,19 @@ export interface Project {
    */
   serviceIds: string[]
   createdAt: number
+}
+
+export interface ProjectEnvVar {
+  key: string
+  value: string
+  /** Looks like a credential; the UI masks it until asked. */
+  secret: boolean
+}
+
+export interface ProjectEnvFile {
+  path: string
+  exists: boolean
+  vars: ProjectEnvVar[]
 }
 
 export interface ProjectDescriptor extends Project {

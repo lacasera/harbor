@@ -26,9 +26,15 @@ export function LogRows({
         <div key={line.id} className={`log-row ${line.level}`}>
           <span className="t">{formatTime(line.timestamp)}</span>
           {!compact && (
-            <span className="src">
+            <span className="src" title={`${line.source} · ${line.stream}`}>
               <span className="dot sm" style={{ background: tintFor(line.source) }} />
-              <span style={{ color: tintFor(line.source) }}>{line.source}</span>
+              <span style={{ color: tintFor(line.source) }}>
+                {/* A project tails several files; which one matters more than
+                    repeating the project name on every row. */}
+                {line.stream && line.stream !== 'stdout' && line.stream !== 'stderr'
+                  ? line.stream
+                  : line.source}
+              </span>
             </span>
           )}
           <span className="lvl">{line.level === 'unknown' ? '' : line.level}</span>

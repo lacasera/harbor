@@ -1,10 +1,19 @@
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'unknown'
 
 export interface LogSource {
-  /** "file" tails a path; "stdout"/"stderr" attach to a managed process. */
-  kind: 'file' | 'stdout' | 'stderr'
-  /** Absolute path for `kind: "file"`. Ignored otherwise. */
+  /**
+   * "file" tails one path; "dir" tails every matching file in a directory and
+   * picks up ones created later; "stdout"/"stderr" attach to a managed process.
+   *
+   * "dir" exists because the interesting logs are rarely a fixed path: Laravel's
+   * daily channel writes laravel-2026-08-19.log, and nginx only creates a site's
+   * access log on the first request.
+   */
+  kind: 'file' | 'dir' | 'stdout' | 'stderr'
+  /** Absolute path for "file", or the directory for "dir". */
   path?: string
+  /** For "dir": which filenames to tail. Defaults to everything ending .log. */
+  match?: string
   /** Display name, e.g. "minio.log". Defaults to the driver's displayName. */
   label?: string
 }

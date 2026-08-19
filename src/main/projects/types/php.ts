@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ProjectType, RuntimeRef } from '../../../shared/index.js'
+import type { LogSource, ProjectType, RuntimeRef } from '../../../shared/index.js'
 import type { PhpRuntime } from '../../runtimes/php.js'
 
 export class PhpProjectType implements ProjectType {
@@ -30,4 +30,12 @@ export class PhpProjectType implements ProjectType {
   async startCommand(): Promise<string | null> {
     return null
   }
+  /**
+   * Deliberately empty: where a PHP app logs depends on its framework, and the
+   * PhpFrameworkDriver is the thing that knows. ProjectManager merges the two.
+   */
+  logSources(): LogSource[] {
+    return []
+  }
+
 }

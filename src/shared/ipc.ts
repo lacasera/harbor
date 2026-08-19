@@ -5,7 +5,7 @@ import type {
   ServiceDescriptor
 } from './service.js'
 import type { RuntimeDescriptor, ResolvedVersion, RuntimeId } from './runtime.js'
-import type { ProjectDescriptor, ProjectTypeId } from './project.js'
+import type { ProjectDescriptor, ProjectEnvFile, ProjectTypeId } from './project.js'
 import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
@@ -111,6 +111,8 @@ export interface IpcContract {
     ProjectDescriptor
   ]
   'projects:chooseDirectory': [[], string | null]
+  /** The project's own .env, read from disk. */
+  'projects:envFile': [[projectId: string], ProjectEnvFile]
 
   'processes:list': [[], ProcessHandle[]]
   'processes:stop': [[processId: string], void]

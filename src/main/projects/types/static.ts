@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ProjectType } from '../../../shared/index.js'
+import type { LogSource, ProjectType } from '../../../shared/index.js'
 
 /** Lowest priority: everything else falls through to plain file serving. */
 export class StaticProjectType implements ProjectType {
@@ -28,4 +28,9 @@ export class StaticProjectType implements ProjectType {
     }
     return ''
   }
+  /** Static sites have no application log; nginx's site logs cover them. */
+  logSources(): LogSource[] {
+    return []
+  }
+
 }

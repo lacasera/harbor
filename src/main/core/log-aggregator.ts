@@ -1,5 +1,13 @@
 import { EventEmitter } from 'node:events'
-import { createReadStream, existsSync, statSync, watch, type FSWatcher } from 'node:fs'
+import {
+  createReadStream,
+  existsSync,
+  readdirSync,
+  statSync,
+  watch,
+  type FSWatcher
+} from 'node:fs'
+import { basename, join } from 'node:path'
 import type { LogLevel, LogLine, LogQuery, LogSource } from '../../shared/logs.js'
 import type { ProcessHandle } from '../../shared/process.js'
 import type { ProcessManager } from './process-manager.js'
@@ -24,6 +32,7 @@ export class LogAggregator extends EventEmitter {
   private nextId = 1
   private readonly sources = new Set<string>()
   private readonly watchers = new Map<string, { watcher: FSWatcher; offset: number }>()
+  private readonly dirWatchers = new Map<string, FSWatcher>()
 
   constructor(processes: ProcessManager) {
     super()
@@ -40,8 +49,42 @@ export class LogAggregator extends EventEmitter {
   /** Attach a driver's declared file sources. stdout/stderr arrive for free. */
   attach(sourceId: string, logSources: LogSource[]): void {
     for (const src of logSources) {
-      if (src.kind !== 'file' || !src.path) continue
-      this.tailFile(sourceId, src.label ?? src.path, src.path)
+      if (!src.path) continue
+      if (src.kind === 'file') this.tailFile(sourceId, src.label ?? basename(src.path), src.path)
+      else if (src.kind === 'dir') this.tailDirectory(sourceId, src)
+    }
+  }
+
+  /**
+   * Tail every matching file in a directory, including ones that appear later.
+   * A log that does not exist yet is the normal case — Laravel writes its first
+   * line when something is logged, nginx creates a site's access log on the
+   * first request — and a one-shot existence check misses all of them.
+   */
+  private tailDirectory(sourceId: string, src: LogSource): void {
+    const dir = src.path as string
+    const pattern = src.match ? new RegExp(src.match) : /\.log$/
+    const key = `${sourceId}::dir::${dir}`
+    if (this.dirWatchers.has(key) || !existsSync(dir)) return
+
+    const scan = (): void => {
+      let entries: string[] = []
+      try {
+        entries = readdirSync(dir)
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        if (!pattern.test(entry)) continue
+        this.tailFile(sourceId, src.label ? `${src.label}/${entry}` : entry, join(dir, entry))
+      }
+    }
+
+    scan()
+    try {
+      this.dirWatchers.set(key, watch(dir, () => scan()))
+    } catch {
+      /* unwatchable directory is not worth failing over */
     }
   }
 
@@ -52,13 +95,23 @@ export class LogAggregator extends EventEmitter {
         this.watchers.delete(key)
       }
     }
+    for (const [key, watcher] of this.dirWatchers) {
+      if (key.startsWith(`${sourceId}::`)) {
+        watcher.close()
+        this.dirWatchers.delete(key)
+      }
+    }
   }
 
-  private tailFile(sourceId: string, label: string, path: string): void {
+  private tailFile(sourceId: string, label: string, path: string, fromStart = false): void {
     const key = `${sourceId}::${path}`
     if (this.watchers.has(key) || !existsSync(path)) return
 
-    const offset = statSync(path).size
+    // Existing logs start from the end — nobody wants a 40 MB laravel.log
+    // replayed into the viewer — but the last few lines are useful context.
+    const size = statSync(path).size
+    const offset = fromStart ? 0 : size
+    if (!fromStart && size > 0) this.readTail(sourceId, label, path, size)
     const watcher = watch(path, () => {
       const entry = this.watchers.get(key)
       if (!entry) return
@@ -83,6 +136,24 @@ export class LogAggregator extends EventEmitter {
       })
     })
     this.watchers.set(key, { watcher, offset })
+  }
+
+  /** Emit the final few KB of an existing file so the viewer opens with context. */
+  private readTail(sourceId: string, label: string, path: string, size: number): void {
+    const window = 16 * 1024
+    const start = Math.max(0, size - window)
+    const stream = createReadStream(path, { start, end: size - 1, encoding: 'utf8' })
+    let buf = ''
+    stream.on('data', (c) => (buf += c))
+    stream.on('error', () => undefined)
+    stream.on('end', () => {
+      const lines = buf.split('\n')
+      // Drop a partial first line when we started mid-file.
+      if (start > 0) lines.shift()
+      for (const line of lines.slice(-40)) {
+        if (line.trim()) this.push(sourceId, label, line)
+      }
+    })
   }
 
   push(source: string, stream: string, message: string): void {

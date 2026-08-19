@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ProjectType, RuntimeRef } from '../../../shared/index.js'
+import type { LogSource, ProjectType, RuntimeRef } from '../../../shared/index.js'
 
 /**
  * Anything that binds a port: Express, Nest, Vite dev server, Nitro. Served
@@ -59,4 +59,13 @@ export class NodeServerProjectType implements ProjectType {
       return null
     }
   }
+  /**
+   * A managed dev server's stdout already reaches the aggregator through
+   * ProcessManager. This covers apps that also write files — pino, winston and
+   * friends default to ./logs.
+   */
+  logSources(dir: string): LogSource[] {
+    return [{ kind: 'dir', path: join(dir, 'logs'), match: '\\.(log|ndjson)$', label: 'app' }]
+  }
+
 }

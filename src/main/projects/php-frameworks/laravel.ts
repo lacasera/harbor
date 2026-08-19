@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { LogSource } from '../../../shared/logs.js'
 import type { NginxRewriteRule, PhpFrameworkDriver } from '../../../shared/project.js'
 
 export class LaravelDriver implements PhpFrameworkDriver {
@@ -36,5 +37,10 @@ export class LaravelDriver implements PhpFrameworkDriver {
     } catch {
       return null
     }
+  }
+
+  /** Laravel's single and daily channels both live here. */
+  logSources(dir: string): LogSource[] {
+    return [{ kind: 'dir', path: join(dir, 'storage', 'logs'), match: '\\.log$', label: 'laravel' }]
   }
 }

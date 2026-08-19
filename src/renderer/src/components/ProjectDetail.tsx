@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ProjectDescriptor } from '../../../shared/project.js'
+import type { ProjectDescriptor, ProjectEnvFile } from '../../../shared/project.js'
 import type { AnalysisResult } from '../../../shared/intelligence.js'
 import type { EnvBlock as EnvBlockData, ServiceDescriptor } from '../../../shared/service.js'
 import type { RuntimeDescriptor } from '../../../shared/runtime.js'
@@ -207,14 +207,22 @@ export function ProjectDetail({
           <div className="card" style={{ maxWidth: 1180 }}>
             <div className="card-head tinted">
               <span>{project.name}</span>
-              <span className="mono small muted">{proc ? `pid ${proc.pid ?? '—'}` : 'no process'}</span>
+              <span className="mono small muted">
+                {proc
+                  ? `pid ${proc.pid ?? '—'}`
+                  : project.serveModel === 'reverse-proxy'
+                    ? 'no process'
+                    : 'nginx + application logs'}
+              </span>
               <div className="grow" />
               <button type="button" className="back" style={{ color: 'var(--ac)' }} onClick={onOpenLogs}>
                 Open in unified logs →
               </button>
             </div>
             <div className="log-pane">
-              <LogRows lines={logs.filter((l) => l.source === project.id).slice(-60)} compact />
+              {/* Not compact: these come from several files, so the stream
+                  each line came from is the useful column. */}
+              <LogRows lines={logs.filter((l) => l.source === project.id).slice(-120)} />
             </div>
           </div>
         )}
@@ -476,7 +484,19 @@ function EnvTab({
   onManage: () => void
 }): React.JSX.Element {
   const [blocks, setBlocks] = useState<EnvBlockData[]>([])
+  const [envFile, setEnvFile] = useState<ProjectEnvFile | null>(null)
+  const [revealed, setRevealed] = useState(false)
   const { copied, copy } = useCopy()
+
+  useEffect(() => {
+    let cancelled = false
+    void invoke('projects:envFile', project.id).then((file) => {
+      if (!cancelled) setEnvFile(file)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [project.id])
 
   // Only this project's services — an aggregate of everything running was a
   // stand-in until projects could declare what they use.
@@ -499,8 +519,61 @@ function EnvTab({
   const varCount = rows.filter((r) => r.eq).length
   const done = copied === 'allenv'
 
+  // Which service keys would overwrite something the project already sets.
+  const existing = new Map((envFile?.vars ?? []).map((v) => [v.key, v.value]))
+  const conflicts = rows.filter((r) => r.eq && existing.has(r.key) && existing.get(r.key) !== r.value)
+
   return (
     <div style={{ maxWidth: 860 }}>
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-head tinted" style={{ padding: '9px 14px' }}>
+          <span className="mono small" style={{ color: 'var(--tx2)' }}>
+            {envFile?.path.split('/').pop() ?? '.env'}
+          </span>
+          <span className="divider-v" />
+          <span className="small muted">
+            {envFile?.exists
+              ? `${envFile.vars.length} variables · the project's own file`
+              : 'no .env in this project'}
+          </span>
+          <div className="grow" />
+          {envFile?.vars.some((v) => v.secret) && (
+            <button type="button" className="btn xs" onClick={() => setRevealed((r) => !r)}>
+              {revealed ? 'Hide secrets' : 'Reveal secrets'}
+            </button>
+          )}
+          <button
+            type="button"
+            className={`btn xs ${copied === 'projenv' ? 'ok' : ''}`}
+            disabled={!envFile?.exists}
+            onClick={() =>
+              copy(
+                (envFile?.vars ?? []).map((v) => `${v.key}=${v.value}`).join('\n'),
+                'projenv'
+              )
+            }
+          >
+            {copied === 'projenv' ? '✓ Copied' : '⧉ Copy'}
+          </button>
+        </div>
+        <EnvLines
+          rows={(envFile?.vars ?? []).map((v, i) => ({
+            id: v.key,
+            n: String(i + 1),
+            key: v.key,
+            eq: '=',
+            // Masked by default: this pane is as likely to be on a screen share
+            // as anything else in the app.
+            value: v.secret && !revealed ? '•'.repeat(Math.min(v.value.length, 24)) : v.value
+          }))}
+        />
+        {envFile && !envFile.exists && (
+          <p className="small muted" style={{ padding: '0 14px 12px' }}>
+            Harbor reads this file, it never writes it.
+          </p>
+        )}
+      </div>
+
       <div
         style={{
           display: 'flex',
@@ -511,7 +584,7 @@ function EnvTab({
         }}
       >
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Aggregated environment</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Service environment</div>
           <div
             style={{
               marginTop: 3,
@@ -522,7 +595,7 @@ function EnvTab({
               textWrap: 'pretty'
             }}
           >
-            Merged from every running service, deduped, with live values from the running
+            Merged from this project's services, deduped, with live values from the running
             instances — real ports, real credentials.
           </div>
         </div>
@@ -552,6 +625,14 @@ function EnvTab({
         </div>
         <EnvLines rows={rows} />
       </div>
+
+      {conflicts.length > 0 && (
+        <p className="small" style={{ color: 'var(--am)', marginTop: 10 }}>
+          {conflicts.length} of these already differ in {envFile?.path.split('/').pop()}:{' '}
+          <span className="mono">{conflicts.map((c) => c.key).join(', ')}</span> — pasting will
+          change them.
+        </p>
+      )}
 
       {!selected.length && (
         <p className="small muted" style={{ marginTop: 12 }}>

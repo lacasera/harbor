@@ -286,6 +286,21 @@ three real codebases: two Laravel apps (11/11 each) and symfony/demo (10/10).
 
 ---
 
+## Application logs and project env
+
+Both are driver-shaped rather than framework-specific:
+
+- `ProjectType.logSources(dir)` says where an application of that type writes
+  its own logs; `PhpFrameworkDriver.logSources(dir)` refines it for the fpm
+  model, since only the framework knows its layout. ProjectManager merges those
+  with the nginx access/error logs Harbor writes for the domain.
+- `LogSource` gained a `dir` kind, because the interesting logs are rarely a
+  fixed path — Laravel's daily channel writes `laravel-<date>.log`, and nginx
+  only creates a site's access log on the first request.
+- The project's own `.env` is read (never written) and shown beside the service
+  exports, with credential-shaped keys masked and any key that would be
+  overwritten flagged.
+
 ## Verification
 
 | Command | Covers |

@@ -8,9 +8,11 @@ import type {
   ProjectType,
   ProjectTypeId
 } from '../../shared/project.js'
+import type { LogSource } from '../../shared/logs.js'
 import type { ResolvedVersion, RuntimeId } from '../../shared/runtime.js'
 import type { ConfigStore } from '../core/config-store.js'
 import type { ProcessManager } from '../core/process-manager.js'
+import type { LogAggregator } from '../core/log-aggregator.js'
 import type { PortAllocator } from '../core/port-allocator.js'
 import type { RuntimeManager } from '../runtimes/index.js'
 import type { PhpRuntime } from '../runtimes/php.js'
@@ -32,6 +34,7 @@ export interface ProjectManagerDeps {
   processes: ProcessManager
   ports: PortAllocator
   runtimes: RuntimeManager
+  logs: LogAggregator
   php: PhpRuntime
   fpm: PhpFpmManager
   native: NativeBackend
@@ -173,6 +176,7 @@ export class ProjectManager extends EventEmitter {
       expected.add(`${project.domain}.conf`)
       try {
         await this.writeVhost(project)
+        await this.attachLogs(project)
         written++
       } catch (err) {
         failed.push([project.name, (err as Error).message])
@@ -259,6 +263,7 @@ export class ProjectManager extends EventEmitter {
     const project = this.find(id)
     const handle = this.deps.processes.findByOwner('project', id)
     if (handle) await this.deps.processes.stop(handle.id)
+    this.deps.logs.detach(id)
     this.nginx.remove(project)
     this.deps.ports.release(`project:${id}`)
     this.emit('forgotten', id)
@@ -411,6 +416,44 @@ export class ProjectManager extends EventEmitter {
     const version = await this.resolvePhpVersion(project, framework)
     await this.deps.fpm.start(version)
     return version
+  }
+
+  /**
+   * Everything worth tailing for a project: the nginx logs Harbor writes for
+   * its domain, whatever the project type declares, and — for fpm sites — what
+   * the framework driver declares. Merged here so no single layer has to know
+   * about all three.
+   */
+  async logSourcesFor(project: Project): Promise<LogSource[]> {
+    const sources: LogSource[] = [
+      {
+        kind: 'dir',
+        path: paths.logs,
+        // Only this site's access/error logs, not every project's.
+        match: `^${project.domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(access|error)\\.log$`,
+        label: 'nginx'
+      }
+    ]
+
+    try {
+      sources.push(...(this.typeById(project.typeId).logSources?.(project.path) ?? []))
+    } catch {
+      /* an unknown type should not stop the nginx logs being tailed */
+    }
+
+    if (project.serveModel === 'fpm') {
+      const framework =
+        this.frameworks.get(project.frameworkId ?? '') ??
+        (await this.frameworks.detect(project.path).catch(() => null))
+      sources.push(...(framework?.logSources?.(project.path) ?? []))
+    }
+
+    return sources
+  }
+
+  /** Begin tailing a project's logs, tagged with the project id. */
+  async attachLogs(project: Project): Promise<void> {
+    this.deps.logs.attach(project.id, await this.logSourcesFor(project))
   }
 
   /** Start a project's dev server. FPM/static sites have nothing to start. */

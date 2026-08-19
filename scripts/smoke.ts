@@ -23,6 +23,7 @@ import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent
 import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js'
 import { toErDiagram } from '../src/main/intelligence/mermaid.js'
 import { resolveBinary } from '../src/main/core/resolve-binary.js'
+import { readProjectEnv } from '../src/main/projects/env-file.js'
 import { quoteForAppleScript } from '../src/main/core/privileged-helper.js'
 import { adviseTld } from '../src/shared/tld.js'
 import { MinioDriver } from '../src/main/services/minio.js'
@@ -449,6 +450,56 @@ check('real public TLDs are flagged before they are adopted', () => {
   assert.equal(adviseTld('harbor').level, 'warn')
   assert.equal(adviseTld('').level, 'danger')
   assert.equal(adviseTld('not valid!').level, 'danger')
+})
+
+check('a project .env is read as written, not interpreted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'harbor-env-'))
+  writeFileSync(
+    join(dir, '.env'),
+    [
+      '# a comment',
+      '',
+      'APP_NAME=Laravel',
+      'APP_KEY=base64:abcdef==',
+      'export DB_HOST=127.0.0.1',
+      'QUOTED="hello world"',
+      "SINGLE='single quoted'",
+      'EMPTY=',
+      'MAIL_PASSWORD=hunter2',
+      'not a pair',
+      '9INVALID=x',
+      'WITH_EQUALS=a=b=c'
+    ].join('\n')
+  )
+
+  const env = await readProjectEnv(dir)
+  assert.equal(env.exists, true)
+
+  const byKey = Object.fromEntries(env.vars.map((v) => [v.key, v.value]))
+  assert.equal(byKey.APP_NAME, 'Laravel')
+  assert.equal(byKey.DB_HOST, '127.0.0.1', 'export prefix is stripped')
+  assert.equal(byKey.QUOTED, 'hello world', 'one matched quote pair is removed')
+  assert.equal(byKey.SINGLE, 'single quoted')
+  assert.equal(byKey.EMPTY, '')
+  assert.equal(byKey.WITH_EQUALS, 'a=b=c', 'only the first = separates')
+  assert.ok(!('9INVALID' in byKey), 'invalid identifiers are skipped')
+  assert.equal(env.vars.length, 8)
+
+  // Secrets are flagged for masking, but their values are still read.
+  const secrets = env.vars.filter((v) => v.secret).map((v) => v.key).sort()
+  assert.deepEqual(secrets, ['APP_KEY', 'MAIL_PASSWORD'])
+  assert.equal(byKey.MAIL_PASSWORD, 'hunter2')
+
+  // An empty value is not worth masking.
+  assert.equal(env.vars.find((v) => v.key === 'EMPTY')?.secret, false)
+})
+
+check('a project with no .env reports that rather than failing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'harbor-noenv-'))
+  const env = await readProjectEnv(dir)
+  assert.equal(env.exists, false)
+  assert.deepEqual(env.vars, [])
+  assert.match(env.path, /\.env$/)
 })
 
 check('privileged commands are escaped for AppleScript', () => {

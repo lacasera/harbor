@@ -68,6 +68,7 @@ export class HarborApp {
       processes: this.processes,
       ports: this.ports,
       runtimes: this.runtimes,
+      logs: this.logs,
       php,
       fpm: this.fpm,
       native: this.native,

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import type { LogSource } from '../../../shared/logs.js'
 import type { NginxRewriteRule, PhpFrameworkDriver } from '../../../shared/project.js'
 
 export class WordPressDriver implements PhpFrameworkDriver {
@@ -31,6 +32,13 @@ export class WordPressDriver implements PhpFrameworkDriver {
         location: '~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$',
         directives: ['expires max;', 'log_not_found off;', 'access_log off;']
       }
+    ]
+  }
+
+  /** Only written when WP_DEBUG_LOG is on, so it may never appear. */
+  logSources(dir: string): LogSource[] {
+    return [
+      { kind: 'file', path: join(dir, 'wp-content', 'debug.log'), label: 'wp-debug' }
     ]
   }
 }

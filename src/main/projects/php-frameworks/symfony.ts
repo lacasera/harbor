@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { LogSource } from '../../../shared/logs.js'
 import type { NginxRewriteRule, PhpFrameworkDriver } from '../../../shared/project.js'
 
 export class SymfonyDriver implements PhpFrameworkDriver {
@@ -37,5 +38,9 @@ export class SymfonyDriver implements PhpFrameworkDriver {
 
   rewrites(): NginxRewriteRule[] {
     return [{ location: '/', directives: ['try_files $uri /index.php$is_args$args;'] }]
+  }
+
+  logSources(dir: string): LogSource[] {
+    return [{ kind: 'dir', path: join(dir, 'var', 'log'), match: '\\.log$', label: 'symfony' }]
   }
 }
