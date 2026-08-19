@@ -825,9 +825,7 @@
   align-items: flex-start;
   gap: 11px;
 }
-.svc-mono {
-  width: 34px;
-  height: 34px;
+.svc-tile {
   flex: none;
   border-radius: 9px;
   display: flex;
@@ -836,13 +834,6 @@
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
-}
-.svc-mono.lg {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  font-size: 15px;
 }
 .service-card .meta {
   flex: 1;

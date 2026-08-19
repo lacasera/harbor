@@ -1,7 +1,12 @@
 import type { JSONSchema } from '../../shared/json-schema.js'
 import type { LogSource } from '../../shared/logs.js'
 import type { ProcessHandle } from '../../shared/process.js'
-import type { ServiceConfig, ServiceDriver, ServiceStatus } from '../../shared/service.js'
+import type {
+  ServiceConfig,
+  ServiceDriver,
+  ServiceIconKind,
+  ServiceStatus
+} from '../../shared/service.js'
 import type { ComposeFragment, DockerBackend } from '../backends/docker-backend.js'
 
 /**
@@ -15,6 +20,8 @@ export interface DockerServiceSpec {
   displayName: string
   description: string
   defaultPorts: number[]
+  icon: ServiceIconKind
+  tint: string
   /** Offered in the version dropdown; the first entry is the default. */
   versions: string[]
   configSchema: JSONSchema
@@ -54,6 +61,12 @@ export class DockerServiceDriver implements ServiceDriver {
   }
   get defaultPorts(): number[] {
     return this.spec.defaultPorts
+  }
+  get icon(): ServiceIconKind {
+    return this.spec.icon
+  }
+  get tint(): string {
+    return this.spec.tint
   }
   get configSchema(): JSONSchema {
     return this.spec.configSchema

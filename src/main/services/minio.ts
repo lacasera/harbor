@@ -25,6 +25,8 @@ export class MinioDriver implements ServiceDriver {
   readonly description = 'S3-compatible object storage'
   readonly backend = 'native' as const
   readonly defaultPorts = [9000, 9001]
+  readonly icon = 'storage' as const
+  readonly tint = '#C72E49'
 
   readonly configSchema: JSONSchema = {
     type: 'object',

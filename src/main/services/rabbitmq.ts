@@ -15,6 +15,8 @@ export class RabbitMqDriver implements ServiceDriver {
   readonly description = 'AMQP message broker'
   readonly backend = 'docker' as const
   readonly defaultPorts = [5672, 15672]
+  readonly icon = 'queue' as const
+  readonly tint = '#FF6600'
 
   readonly configSchema: JSONSchema = {
     type: 'object',

@@ -89,6 +89,8 @@ export class ServiceRegistry extends EventEmitter {
       description: driver.description,
       backend: driver.backend,
       defaultPorts: driver.defaultPorts,
+      icon: driver.icon,
+      tint: driver.tint,
       configSchema: driver.configSchema,
       envKeys: Object.keys(driver.envHints),
       installed: installedVersions.length > 0,

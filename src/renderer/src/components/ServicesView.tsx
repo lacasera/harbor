@@ -2,15 +2,8 @@ import { useMemo, useState } from 'react'
 import type { ServiceDescriptor } from '../../../shared/service.js'
 import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import { invoke } from '../ipc/client.js'
-import {
-  StatusDot,
-  Toggle,
-  formatBytes,
-  monogramsFor,
-  statusOf,
-  tintFor,
-  usageForOwner
-} from './primitives.js'
+import { StatusDot, Toggle, formatBytes, statusOf, usageForOwner } from './primitives.js'
+import { ServiceIcon } from './ServiceIcon.js'
 
 export function ServicesView({
   services,
@@ -27,10 +20,7 @@ export function ServicesView({
 }): React.JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const monograms = useMemo(
-    () => monogramsFor(services.map((s) => s.displayName)),
-    [services]
-  )
+  const names = useMemo(() => services.map((s) => s.displayName), [services])
 
   const run = async (id: string, fn: () => Promise<ServiceDescriptor | void>): Promise<void> => {
     setBusy(id)
@@ -105,9 +95,13 @@ export function ServicesView({
                   onKeyDown={(e) => e.key === 'Enter' && onOpen(service.id)}
                 >
                   <div className="top">
-                    <div className="svc-mono" style={{ background: tintFor(service.id) }}>
-                      {monograms.get(service.displayName)}
-                    </div>
+                    <ServiceIcon
+                      id={service.id}
+                      displayName={service.displayName}
+                      icon={service.icon}
+                      tint={service.tint}
+                      catalogue={names}
+                    />
                     <div className="meta">
                       <div className="title">
                         <span>{service.displayName}</span>

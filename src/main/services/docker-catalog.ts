@@ -12,6 +12,8 @@ import { portField } from './docker-service.js'
 
 export const ELASTICSEARCH: DockerServiceSpec = {
   id: 'elasticsearch',
+  icon: 'search',
+  tint: '#00BFB3',
   displayName: 'Elasticsearch',
   description: 'Distributed search & analytics',
   defaultPorts: [9200, 9300],
@@ -67,6 +69,8 @@ export const ELASTICSEARCH: DockerServiceSpec = {
 
 export const OPENSEARCH: DockerServiceSpec = {
   id: 'opensearch',
+  icon: 'search',
+  tint: '#4A78C4',
   displayName: 'OpenSearch',
   description: 'Search & analytics suite',
   // Defaults to 9250 rather than 9200 so it can run beside Elasticsearch.
@@ -112,6 +116,8 @@ export const OPENSEARCH: DockerServiceSpec = {
 
 export const LOCALSTACK: DockerServiceSpec = {
   id: 'localstack',
+  icon: 'cloud',
+  tint: '#7B61FF',
   displayName: 'LocalStack',
   description: 'Local AWS cloud emulator',
   defaultPorts: [4566],
@@ -160,6 +166,8 @@ export const LOCALSTACK: DockerServiceSpec = {
 
 export const KAFKA: DockerServiceSpec = {
   id: 'kafka',
+  icon: 'stream',
+  tint: '#7A8595',
   displayName: 'Kafka',
   description: 'Distributed event streaming',
   defaultPorts: [9092],

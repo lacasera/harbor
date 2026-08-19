@@ -8,16 +8,8 @@ import type { LogLine } from '../../../shared/logs.js'
 import type { ProcessHandle, ResourceUsage } from '../../../shared/process.js'
 import type { ServiceTab } from '../routes.js'
 import { invoke } from '../ipc/client.js'
-import {
-  StatusDot,
-  Tabs,
-  formatBytes,
-  monogramsFor,
-  statusOf,
-  tintFor,
-  useCopy,
-  usageForOwner
-} from './primitives.js'
+import { StatusDot, Tabs, formatBytes, statusOf, useCopy, usageForOwner } from './primitives.js'
+import { ServiceIcon } from './ServiceIcon.js'
 import { EnvLines, toRows, toText } from './EnvBlock.js'
 import { SchemaForm } from './SchemaForm.js'
 import { LogRows } from './LogsView.js'
@@ -48,10 +40,7 @@ export function ServiceDetail({
   const [block, setBlock] = useState<EnvBlockData | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([])
   const { copied, copy } = useCopy()
-  const monograms = useMemo(
-    () => monogramsFor(catalogue.map((s) => s.displayName)),
-    [catalogue]
-  )
+  const names = useMemo(() => catalogue.map((s) => s.displayName), [catalogue])
 
   useEffect(() => {
     let cancelled = false
@@ -117,9 +106,14 @@ export function ServiceDetail({
           }}
         >
           <div className="hstack" style={{ gap: 12, flexWrap: 'nowrap' }}>
-            <div className="svc-mono lg" style={{ background: tintFor(service.id) }}>
-              {monograms.get(service.displayName)}
-            </div>
+            <ServiceIcon
+              id={service.id}
+              displayName={service.displayName}
+              icon={service.icon}
+              tint={service.tint}
+              catalogue={names}
+              size={40}
+            />
             <div>
               <div className="hstack" style={{ gap: 9 }}>
                 <span className="page-title">{service.displayName}</span>

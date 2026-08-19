@@ -22,6 +22,8 @@ export class MeilisearchDriver implements ServiceDriver {
   readonly description = 'Typo-tolerant search engine'
   readonly backend = 'native' as const
   readonly defaultPorts = [7700]
+  readonly icon = 'search' as const
+  readonly tint = '#FF5CAA'
 
   readonly configSchema: JSONSchema = {
     type: 'object',

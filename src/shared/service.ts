@@ -4,6 +4,24 @@ import type { ProcessHandle } from './process.js'
 
 export type BackendKind = 'native' | 'docker'
 
+/**
+ * What a service *is*, which is what its icon should show.
+ *
+ * Deliberately a category rather than a brand: shipping redrawn trademarks is
+ * a licensing problem, and a category glyph stays correct when a service is
+ * renamed or forked. A driver declares its own, so adding a service never
+ * means editing an icon map in the renderer.
+ */
+export type ServiceIconKind =
+  | 'storage'
+  | 'search'
+  | 'queue'
+  | 'stream'
+  | 'cloud'
+  | 'database'
+  | 'cache'
+  | 'generic'
+
 export type ServiceHealth = 'stopped' | 'starting' | 'running' | 'unhealthy' | 'error'
 
 export interface ServiceStatus {
@@ -39,6 +57,10 @@ export interface ServiceDriver {
   description?: string
   backend: BackendKind
   defaultPorts: number[]
+  /** Which glyph represents it. Defaults to a monogram when absent. */
+  icon?: ServiceIconKind
+  /** Brand-ish accent for the tile, so services stay distinguishable. */
+  tint?: string
   /** Versions offered in the install dropdown; first entry is the default. */
   availableVersions(): Promise<string[]>
   installedVersions(): Promise<string[]>
@@ -63,6 +85,8 @@ export interface ServiceDescriptor {
   description?: string
   backend: BackendKind
   defaultPorts: number[]
+  icon?: ServiceIconKind
+  tint?: string
   configSchema: JSONSchema
   envKeys: string[]
   installed: boolean
