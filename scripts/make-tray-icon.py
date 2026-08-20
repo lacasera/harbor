@@ -25,37 +25,42 @@ def draw(size):
     def px(v):
         return ss * v
 
-    # Inset from the canvas: macOS gives the icon no padding of its own, and a
-    # glyph touching the edges sits badly against its neighbours.
-    stem_w = px(0.075)
-    ring_r = px(0.088)
-    ring_cy = px(0.215)
+    # Sized to fill the canvas. macOS scales the template to the menu bar and
+    # adds its own spacing, so a glyph drawn small inside a 16pt box just reads
+    # as a smaller icon than everything beside it — which is exactly how the
+    # first version looked next to Wi-Fi and Battery.
+    #
+    # Strokes are heavy for the same reason: at this size a hairline is a grey
+    # smudge, and the mark has to be identifiable without being looked at.
+    stem_w = px(0.115)
+    ring_r = px(0.125)
+    ring_cy = px(0.150)
 
     d.ellipse(
         [cx - ring_r, ring_cy - ring_r, cx + ring_r, ring_cy + ring_r],
         outline=BLACK + (255,),
-        width=int(px(0.045)),
+        width=int(px(0.070)),
     )
     d.rounded_rectangle(
-        [cx - stem_w / 2, ring_cy, cx + stem_w / 2, px(0.760)],
+        [cx - stem_w / 2, ring_cy, cx + stem_w / 2, px(0.900)],
         radius=stem_w / 2,
         fill=BLACK + (255,),
     )
-    bar_w = px(0.290)
-    bar_y = px(0.330)
+    bar_w = px(0.360)
+    bar_y = px(0.290)
     d.rounded_rectangle(
-        [cx - bar_w, bar_y, cx + bar_w, bar_y + px(0.070)],
-        radius=px(0.035),
+        [cx - bar_w, bar_y, cx + bar_w, bar_y + px(0.105)],
+        radius=px(0.050),
         fill=BLACK + (255,),
     )
-    fr = px(0.270)
-    fcy = px(0.560)
+    fr = px(0.345)
+    fcy = px(0.570)
     d.arc(
         [cx - fr, fcy - fr, cx + fr, fcy + fr],
-        start=25,
-        end=155,
+        start=22,
+        end=158,
         fill=BLACK + (255,),
-        width=int(px(0.080)),
+        width=int(px(0.115)),
     )
     return img.resize((size, size), Image.LANCZOS)
 
