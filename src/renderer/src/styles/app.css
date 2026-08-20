@@ -656,13 +656,23 @@
  * carry buttons were already end-aligned, which left a lone toggle stranded
  * mid-row looking like a mistake.
  *
- * Scoped to `.card-columns` on purpose: the generated service config forms use
- * the same rows inside `.two-col`, and there the control belongs near its label
+ * Scoped to `.card-list` on purpose: the generated service config forms use the
+ * same rows inside `.two-col`, and there the control belongs near its label
  * rather than a long way across a wide pane.
  */
-.card-columns .row .v {
+.card-list .row .v {
   justify-content: flex-end;
   text-align: right;
+}
+
+/*
+ * In a full-width list the label side takes the room and the value hugs the
+ * right. With the shared 220px label column, descriptions wrapped to two lines
+ * in a row a thousand pixels wide — the text was cramped while most of the row
+ * was empty.
+ */
+.card-list .row {
+  grid-template-columns: minmax(200px, 1fr) auto;
 }
 
 .stat-row {
@@ -1535,34 +1545,18 @@ a.btn {
 }
 
 /*
- * Pages built from a column of cards — Settings, Runtimes.
+ * Pages built from sections — Settings, Runtimes.
  *
- * A single column stretched across a maximised window is not filling the page
- * in any useful sense: the label sits against one edge and its control against
- * the other, with a metre of nothing between them. The cards flow into columns
- * instead, so the width goes to content rather than whitespace, and collapse
- * back to one column when there is no room for two.
- *
- * `min(100%, 460px)` rather than a bare `460px`: on a narrow window a bare
- * minimum overflows the container instead of collapsing.
+ * A list, full width, one section after another. Multiple columns were tried
+ * and read badly: sections are of wildly different heights, so a grid left
+ * holes and a column flow reordered them into a column-major sequence nobody
+ * reads that way. The service catalogue is the exception and keeps its grid —
+ * those cards are peers of a uniform shape, which is what a grid is for.
  */
-.card-columns {
-  /*
-   * Columns, not a grid. A grid lays items out in rows and makes every row as
-   * tall as its tallest card, so a short section next to a tall one left a hole
-   * beneath it. Column flow packs each column vertically and the holes go away.
-   *
-   * The trade is reading order: sections run down one column and then down the
-   * next, rather than across. For a page of peer sections that is fine — and
-   * preferable to a gap that looks like something failed to render.
-   */
-  columns: 460px;
-  column-gap: 16px;
-}
-.card-columns > .card {
-  /* A section split across a column boundary would be unreadable. */
-  break-inside: avoid;
-  margin-bottom: 16px;
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 /* ── service instances ─────────────────────────────────────────────────── */
