@@ -1547,10 +1547,22 @@ a.btn {
  * minimum overflows the container instead of collapsing.
  */
 .card-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr));
-  gap: 16px;
-  align-items: start;
+  /*
+   * Columns, not a grid. A grid lays items out in rows and makes every row as
+   * tall as its tallest card, so a short section next to a tall one left a hole
+   * beneath it. Column flow packs each column vertically and the holes go away.
+   *
+   * The trade is reading order: sections run down one column and then down the
+   * next, rather than across. For a page of peer sections that is fine — and
+   * preferable to a gap that looks like something failed to render.
+   */
+  columns: 460px;
+  column-gap: 16px;
+}
+.card-columns > .card {
+  /* A section split across a column boundary would be unreadable. */
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 
 /* ── service instances ─────────────────────────────────────────────────── */
