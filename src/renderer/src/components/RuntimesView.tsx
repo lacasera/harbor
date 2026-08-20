@@ -85,7 +85,7 @@ export function RuntimesView({
       <div className="page-body">
         {error && <p className="error-text">{error}</p>}
 
-        <div className="stack" style={{ maxWidth: 1000, gap: 14 }}>
+        <div className="card-columns">
           {runtimes.map((runtime) => {
             const remote = (available[runtime.id] ?? []).filter(
               (v) => !query || v.startsWith(query)

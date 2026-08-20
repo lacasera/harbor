@@ -209,7 +209,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
       <div className="page-body">
         {error && <p className="error-text">{error}</p>}
 
-        <div className="stack" style={{ maxWidth: 760, gap: 14 }}>
+        <div className="card-columns">
           <div className="card">
             <div className="section-label">
               Environment
