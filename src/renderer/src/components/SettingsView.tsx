@@ -305,6 +305,14 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                     </span>
                   </div>
                   <div className="hint">{rt.description}</div>
+                  {/* Under the description, not out at the right edge. It is
+                      the longest string in the row and the column it was in is
+                      the narrow one once the page splits into columns. */}
+                  {!rt.installed && rt.install && (
+                    <div className="hint mono" style={{ marginTop: 4 }} title="Run this in your terminal">
+                      {rt.install}
+                    </div>
+                  )}
                 </div>
                 <div className="v hstack" style={{ gap: 8, justifyContent: 'flex-end' }}>
                   <span className="small muted">{rt.detail}</span>
@@ -321,11 +329,12 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                       {runtimeBusy === rt.id ? 'Starting…' : 'Start'}
                     </button>
                   )}
-                  {!rt.installed && rt.install && (
-                    <span className="mono small muted" title="Run this in your terminal">
-                      {rt.install}
-                    </span>
-                  )}
+                  {/*
+                   * "Use this" beside an "in use" badge reads as a
+                   * contradiction. The runtime auto picked is already in use;
+                   * the action available for it is to pin that choice so it
+                   * stays put when something else is installed later.
+                   */}
                   {rt.installed && preference !== rt.id && (
                     <button
                       type="button"
@@ -333,7 +342,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                       disabled={runtimeBusy !== null}
                       onClick={() => void runRuntime(rt.id, () => invoke('containers:select', rt.id))}
                     >
-                      Use this
+                      {rt.selected ? 'Always use' : 'Use this'}
                     </button>
                   )}
                 </div>
