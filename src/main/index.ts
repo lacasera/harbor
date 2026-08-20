@@ -2,6 +2,8 @@ import { app, BrowserWindow, screen, type Tray } from 'electron'
 import { join } from 'node:path'
 import { HarborApp } from './app.js'
 import { openExternal } from './core/open-external.js'
+import { resolveUserPath } from './core/shell-path.js'
+import { runDiagnostics } from './diagnostics.js'
 import { registerIpc } from './ipc/index.js'
 import { createTray } from './tray.js'
 
@@ -119,12 +121,41 @@ function createWindow(): BrowserWindow {
 }
 
 void app.whenReady().then(async () => {
+  // Before anything else. A GUI-launched app inherits launchd's PATH, not the
+  // user's, so every tool Harbor shells out to is invisible until this runs —
+  // and HarborApp's constructor already probes for some of them.
+  const resolved = await resolveUserPath().catch(() => null)
+  if (resolved) process.env.PATH = resolved.path
+
   harbor = new HarborApp()
+  if (resolved) {
+    harbor.logs.push('harbor', 'startup', `PATH resolved from ${resolved.source}`)
+  }
   registerIpc(harbor, () => window)
   await harbor.start()
 
   window = createWindow()
   tray = createTray(harbor, { show: showWindow, quit: () => app.quit() })
+
+  // Reported at startup so a broken installation is visible in the log rather
+  // than only as whatever symptom it happens to produce first.
+  void runDiagnostics(harbor)
+    .then((results) => {
+      const bad = results.filter((r) => r.status !== 'ok')
+      if (!bad.length) {
+        harbor?.logs.push('harbor', 'startup', 'environment checks passed')
+        return
+      }
+      for (const item of bad) {
+        harbor?.logs.push(
+          'harbor',
+          'startup',
+          `${item.status === 'fail' ? 'PROBLEM' : 'note'}: ${item.label} — ${item.detail}` +
+            (item.remedy ? ` (${item.remedy})` : '')
+        )
+      }
+    })
+    .catch(() => undefined)
 
   // Clicking the Dock icon reopens the hidden window rather than doing nothing.
   app.on('activate', showWindow)

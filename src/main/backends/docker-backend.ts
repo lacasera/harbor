@@ -57,11 +57,30 @@ export class DockerBackend implements Backend<DockerStartOptions> {
   }
 
   async available(): Promise<{ ok: boolean; reason?: string }> {
-    const docker = await this.probe('docker version --format "{{.Server.Version}}"')
-    if (docker) return { ok: true }
+    // "Not installed" and "installed but not running" are different problems
+    // with different fixes, and a third — "installed, running, but this process
+    // cannot see it" — is the one that actually happens. A GUI-launched app
+    // gets launchd's PATH, so `docker` at /usr/local/bin is invisible to it and
+    // every failure reported as "no Docker daemon" on a machine running one.
+    const cli = await this.probe('command -v docker')
+    if (!cli) {
+      return {
+        ok: false,
+        reason:
+          'The docker command was not found. Install Docker Desktop or Colima ' +
+          '(brew install colima), then restart Harbor.'
+      }
+    }
+
+    if (await this.probe('docker version --format "{{.Server.Version}}"')) return { ok: true }
+
     const colima = await this.probe('colima status')
-    if (colima) return { ok: false, reason: 'Colima is installed but not running — start it first' }
-    return { ok: false, reason: 'No Docker daemon. Install Colima: brew install colima' }
+    return {
+      ok: false,
+      reason: colima
+        ? 'Colima is installed but not running — start it with: colima start'
+        : 'Docker is installed but its daemon is not responding — start Docker Desktop or Colima'
+    }
   }
 
   async colimaStart(): Promise<void> {

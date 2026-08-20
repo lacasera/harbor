@@ -11,6 +11,7 @@ import type { HarborApp } from '../app.js'
 import { HARBOR_HOME } from '../core/paths.js'
 import { Updater } from '../updater.js'
 import { openExternal } from '../core/open-external.js'
+import { runDiagnostics } from '../diagnostics.js'
 import { readProjectEnv } from '../projects/env-file.js'
 
 /** Typed `handle` — the channel name pins both the args and the return type. */
@@ -65,6 +66,7 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   }))
   handle('app:checkForUpdates', () => updater.check())
   handle('app:openExternal', (url) => openExternal(url))
+  handle('app:diagnostics', () => runDiagnostics(harbor))
 
   // ── services ────────────────────────────────────────────────────────────
   handle('services:list', () => harbor.services.describeCatalogue())

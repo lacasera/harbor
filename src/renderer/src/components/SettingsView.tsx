@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type {
   AppSettings,
   DnsStatus,
@@ -7,8 +7,9 @@ import type {
   UpdateStatus
 } from '../../../shared/ipc.js'
 import { invoke } from '../ipc/client.js'
-import { Toggle } from './primitives.js'
+import { StatusDot, Toggle } from './primitives.js'
 import { adviseTld } from '../../../shared/tld.js'
+import type { Diagnostic } from '../../../shared/diagnostics.js'
 
 interface SystemStatus {
   nginx: NginxStatus
@@ -67,6 +68,24 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
+  const [checking, setChecking] = useState(false)
+
+  /**
+   * Everything Harbor depends on. Shown first because when it is wrong,
+   * nothing below it works and the errors elsewhere describe symptoms.
+   */
+  const refreshDiagnostics = useCallback(async () => {
+    setChecking(true)
+    try {
+      setDiagnostics(await invoke('app:diagnostics'))
+    } finally {
+      setChecking(false)
+    }
+  }, [])
+  useEffect(() => {
+    void refreshDiagnostics()
+  }, [refreshDiagnostics])
 
   useEffect(() => {
     void invoke('settings:get').then((s) => {
@@ -162,6 +181,53 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
         {error && <p className="error-text">{error}</p>}
 
         <div className="stack" style={{ maxWidth: 760, gap: 14 }}>
+          <div className="card">
+            <div className="section-label">
+              Environment
+              <div className="grow" />
+              <button
+                type="button"
+                className="btn xs"
+                disabled={checking}
+                onClick={() => void refreshDiagnostics()}
+              >
+                {checking ? 'Checking…' : 'Re-check'}
+              </button>
+            </div>
+
+            {!diagnostics.length && (
+              <div className="row">
+                <span className="small muted">Checking…</span>
+              </div>
+            )}
+
+            {diagnostics.map((item) => (
+              <div key={item.id} className="row">
+                <div>
+                  <div className="k" style={{ color: 'var(--tx)' }}>
+                    <span className="hstack" style={{ gap: 7 }}>
+                      <StatusDot
+                        status={
+                          item.status === 'ok'
+                            ? 'running'
+                            : item.status === 'fail'
+                              ? 'error'
+                              : 'busy'
+                        }
+                        small
+                      />
+                      {item.label}
+                    </span>
+                  </div>
+                  {item.remedy && <div className="hint">{item.remedy}</div>}
+                </div>
+                <div className="v small" style={{ color: item.status === 'ok' ? 'var(--tx2)' : 'var(--tx)' }}>
+                  {item.detail}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="card">
             <div className="section-label">Domains &amp; TLS</div>
 

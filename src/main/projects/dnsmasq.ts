@@ -80,8 +80,21 @@ export class DnsmasqManager {
     return path
   }
 
+  /** Whether THIS instance spawned it. `start` uses this; status must not. */
   isRunning(): boolean {
     return this.processes.findByOwner('system', 'dnsmasq') !== null
+  }
+
+  /**
+   * Whether a Harbor dnsmasq is serving at all — including one a previous
+   * launch started, which is the normal state after the app restarts.
+   *
+   * Asking only about our own children reported a perfectly healthy resolver as
+   * down, which then reads as a broken installation on the diagnostics page.
+   * The same mistake was made for PHP-FPM pools and had the same symptom.
+   */
+  private async isServing(): Promise<boolean> {
+    return this.isRunning() || (await this.harborDnsmasqPids()).length > 0
   }
 
   /**
@@ -242,13 +255,16 @@ export class DnsmasqManager {
     resolves: boolean
   }> {
     const installed = this.isInstalled()
-    const running = this.isRunning()
+    const running = await this.isServing()
     return {
       installed,
       running,
       resolverConfigured: this.resolverConfigured(tld),
       port: this.port,
-      resolves: running ? (await this.answers(`harbor-probe.${tld}`)) === '127.0.0.1' : false
+      // Probed regardless of what we think is running: answering a query is the
+      // only thing that actually matters, and it is also the check that catches
+      // a resolver that is up but misconfigured.
+      resolves: installed ? (await this.answers(`harbor-probe.${tld}`)) === '127.0.0.1' : false
     }
   }
 }

@@ -23,6 +23,7 @@ import type {
 import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
+import type { Diagnostic } from './diagnostics.js'
 
 export interface UpdateStatus {
   state: 'current' | 'available' | 'disabled' | 'error'
@@ -90,6 +91,8 @@ export interface IpcContract {
    * works or reports why, instead of doing nothing observable.
    */
   'app:openExternal': [[url: string], void]
+  /** Everything Harbor depends on, and whether it is there. */
+  'app:diagnostics': [[], Diagnostic[]]
 
   /** The catalogue: every service, each carrying its instances. */
   'services:list': [[], ServiceDescriptor[]]
