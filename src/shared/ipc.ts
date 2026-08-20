@@ -24,6 +24,7 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 import type { Diagnostic } from './diagnostics.js'
+import type { ContainerRuntimeDescriptor } from './container-runtime.js'
 
 export interface UpdateStatus {
   state: 'current' | 'available' | 'disabled' | 'error'
@@ -75,6 +76,8 @@ export interface AppSettings {
   /** Ports the generated vhosts listen on. 80/443 require a root nginx. */
   httpPort: number
   httpsPort: number
+  /** Chosen container runtime, or `auto`. */
+  containerRuntime: string
 }
 
 /**
@@ -93,6 +96,11 @@ export interface IpcContract {
   'app:openExternal': [[url: string], void]
   /** Everything Harbor depends on, and whether it is there. */
   'app:diagnostics': [[], Diagnostic[]]
+
+  /** Container runtimes: what is available, and which one Harbor uses. */
+  'containers:list': [[force?: boolean], ContainerRuntimeDescriptor[]]
+  'containers:select': [[id: string], ContainerRuntimeDescriptor[]]
+  'containers:start': [[id: string], ContainerRuntimeDescriptor[]]
 
   /** The catalogue: every service, each carrying its instances. */
   'services:list': [[], ServiceDescriptor[]]

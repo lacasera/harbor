@@ -10,6 +10,8 @@ import { invoke } from '../ipc/client.js'
 import { StatusDot, Toggle } from './primitives.js'
 import { adviseTld } from '../../../shared/tld.js'
 import type { Diagnostic } from '../../../shared/diagnostics.js'
+import type { ContainerRuntimeDescriptor } from '../../../shared/container-runtime.js'
+import { AUTO_RUNTIME } from '../../../shared/container-runtime.js'
 
 interface SystemStatus {
   nginx: NginxStatus
@@ -68,6 +70,10 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [runtimes, setRuntimes] = useState<ContainerRuntimeDescriptor[]>([])
+  const [runtimeBusy, setRuntimeBusy] = useState<string | null>(null)
+  /** `auto`, or the id of a runtime the user picked deliberately. */
+  const preference = settings?.containerRuntime ?? AUTO_RUNTIME
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [checking, setChecking] = useState(false)
 
@@ -86,6 +92,29 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   useEffect(() => {
     void refreshDiagnostics()
   }, [refreshDiagnostics])
+
+  useEffect(() => {
+    void invoke('containers:list').then(setRuntimes)
+  }, [])
+
+  const runRuntime = useCallback(
+    async (key: string, fn: () => Promise<ContainerRuntimeDescriptor[]>) => {
+      setRuntimeBusy(key)
+      setError(null)
+      try {
+        setRuntimes(await fn())
+        // The environment block reports the runtime too; leaving it stale would
+        // have the same page disagreeing with itself.
+        await refreshDiagnostics()
+        setSettings(await invoke('settings:get'))
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setRuntimeBusy(null)
+      }
+    },
+    [refreshDiagnostics]
+  )
 
   useEffect(() => {
     void invoke('settings:get').then((s) => {
@@ -223,6 +252,90 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 </div>
                 <div className="v small" style={{ color: item.status === 'ok' ? 'var(--tx2)' : 'var(--tx)' }}>
                   {item.detail}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card">
+            <div className="section-label">
+              Container runtime
+              <div className="grow" />
+              <button
+                type="button"
+                className="btn xs"
+                disabled={runtimeBusy !== null}
+                onClick={() => void runRuntime('refresh', () => invoke('containers:list', true))}
+              >
+                Re-detect
+              </button>
+            </div>
+
+            <div className="row">
+              <div>
+                <div className="k" style={{ color: 'var(--tx)' }}>Choose automatically</div>
+                <div className="hint">
+                  Use whichever runtime is installed and running
+                </div>
+              </div>
+              <div className="v">
+                <Toggle
+                  on={preference === AUTO_RUNTIME}
+                  label="Choose the container runtime automatically"
+                  disabled={runtimeBusy !== null}
+                  onChange={(on) => {
+                    if (!on) return
+                    void runRuntime('auto', () => invoke('containers:select', AUTO_RUNTIME))
+                  }}
+                />
+              </div>
+            </div>
+
+            {runtimes.map((rt) => (
+              <div key={rt.id} className="row">
+                <div>
+                  <div className="k" style={{ color: 'var(--tx)' }}>
+                    <span className="hstack" style={{ gap: 7 }}>
+                      <StatusDot
+                        status={rt.running ? 'running' : rt.installed ? 'busy' : 'stopped'}
+                        small
+                      />
+                      {rt.displayName}
+                      {rt.selected && <span className="pill default-ver">in use</span>}
+                    </span>
+                  </div>
+                  <div className="hint">{rt.description}</div>
+                </div>
+                <div className="v hstack" style={{ gap: 8, justifyContent: 'flex-end' }}>
+                  <span className="small muted">{rt.detail}</span>
+                  {/* Only offered when Harbor can genuinely do it: a GUI app has
+                      to be opened by the user, and saying otherwise is a button
+                      that does nothing. */}
+                  {rt.installed && !rt.running && rt.startable && (
+                    <button
+                      type="button"
+                      className="btn xs"
+                      disabled={runtimeBusy !== null}
+                      onClick={() => void runRuntime(rt.id, () => invoke('containers:start', rt.id))}
+                    >
+                      {runtimeBusy === rt.id ? 'Starting…' : 'Start'}
+                    </button>
+                  )}
+                  {!rt.installed && rt.install && (
+                    <span className="mono small muted" title="Run this in your terminal">
+                      {rt.install}
+                    </span>
+                  )}
+                  {rt.installed && preference !== rt.id && (
+                    <button
+                      type="button"
+                      className="btn xs"
+                      disabled={runtimeBusy !== null}
+                      onClick={() => void runRuntime(rt.id, () => invoke('containers:select', rt.id))}
+                    >
+                      Use this
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

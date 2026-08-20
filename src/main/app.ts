@@ -5,6 +5,7 @@ import { LogAggregator } from './core/log-aggregator.js'
 import { PrivilegedHelper } from './core/privileged-helper.js'
 import { NativeBackend } from './backends/native-backend.js'
 import { DockerBackend } from './backends/docker-backend.js'
+import { ContainerRuntimes } from './containers/index.js'
 import { ServiceCatalogue } from './services/registry.js'
 import { ServiceInstances } from './services/instances.js'
 import { registerServices } from './services/index.js'
@@ -30,6 +31,7 @@ export class HarborApp {
   readonly logs: LogAggregator
   readonly privileged: PrivilegedHelper
   readonly native: NativeBackend
+  readonly containers: ContainerRuntimes
   readonly docker: DockerBackend
   readonly catalogue: ServiceCatalogue
   readonly services: ServiceInstances
@@ -50,7 +52,8 @@ export class HarborApp {
     this.privileged = new PrivilegedHelper()
 
     this.native = new NativeBackend(this.processes)
-    this.docker = new DockerBackend(this.processes)
+    this.containers = new ContainerRuntimes(this.store)
+    this.docker = new DockerBackend(this.processes, this.containers)
 
     this.catalogue = new ServiceCatalogue()
     registerServices(this.catalogue, {

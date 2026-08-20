@@ -68,6 +68,17 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('app:openExternal', (url) => openExternal(url))
   handle('app:diagnostics', () => runDiagnostics(harbor))
 
+  // ── container runtimes ──────────────────────────────────────────────────
+  handle('containers:list', (force) => harbor.containers.describeAll(force))
+  handle('containers:select', async (id) => {
+    harbor.containers.select(id)
+    return harbor.containers.describeAll(true)
+  })
+  handle('containers:start', async (id) => {
+    await harbor.containers.start(id)
+    return harbor.containers.describeAll(true)
+  })
+
   // ── services ────────────────────────────────────────────────────────────
   handle('services:list', () => harbor.services.describeCatalogue())
   handle('services:install', (id, version) => harbor.services.install(id, version))

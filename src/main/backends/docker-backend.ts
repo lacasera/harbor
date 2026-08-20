@@ -1,4 +1,4 @@
-import { exec as execCb, spawn } from 'node:child_process'
+import { execFile as execFileCb, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -6,9 +6,10 @@ import type { ProcessHandle } from '../../shared/process.js'
 import { instanceKey, type ServiceInstanceRef, type ServiceOwnerId } from '../../shared/service.js'
 import type { ProcessManager } from '../core/process-manager.js'
 import { composeDir } from '../core/paths.js'
+import type { ContainerRuntimes } from '../containers/index.js'
 import type { Backend, BackendStartOptions } from './types.js'
 
-const exec = promisify(execCb)
+const execFile = promisify(execFileCb)
 
 /** One service's slice of its owner's compose file. */
 export interface ComposeFragment {
@@ -49,42 +50,55 @@ export class DockerBackend implements Backend<DockerStartOptions> {
   readonly id = 'docker' as const
   private resolveStack: StackResolver = () => ({ composeProject: '', fragments: {} })
 
-  constructor(private readonly processes: ProcessManager) {}
+  constructor(
+    private readonly processes: ProcessManager,
+    private readonly runtimes: ContainerRuntimes
+  ) {}
+
+  /**
+   * The CLI for the selected runtime.
+   *
+   * Docker Desktop, OrbStack and Colima all answer to `docker` and are told
+   * apart by the context this sets; Podman has its own CLI entirely. Every
+   * compose call goes through here so none of the callers has to know which is
+   * in use.
+   */
+  private async cli(): Promise<{ bin: string; compose: string[]; env: NodeJS.ProcessEnv }> {
+    const invocation = await this.runtimes.invocation()
+    if (!invocation) {
+      throw new Error((await this.runtimes.unavailableReason()) ?? 'No container runtime available')
+    }
+    return {
+      bin: invocation.bin,
+      compose: invocation.compose,
+      env: { ...process.env, ...invocation.env }
+    }
+  }
+
+  /** Run a compose command against one owner's file. */
+  private async compose(project: string, file: string, args: string[]): Promise<string> {
+    const { bin, compose, env } = await this.cli()
+    const { stdout } = await execFile(bin, [...compose, '-p', project, '-f', file, ...args], {
+      env,
+      maxBuffer: 16 * 1024 * 1024
+    })
+    return stdout
+  }
 
   /** Wired after construction — the instance store is built later than this. */
   setStackResolver(resolver: StackResolver): void {
     this.resolveStack = resolver
   }
 
+  /**
+   * Whether containers can run at all. The reason comes from the runtime
+   * registry, which knows which one is selected and what is wrong with it —
+   * "not installed", "not running" and "no runtime at all" need different
+   * answers, and naming a product the user has not chosen just misleads them.
+   */
   async available(): Promise<{ ok: boolean; reason?: string }> {
-    // "Not installed" and "installed but not running" are different problems
-    // with different fixes, and a third — "installed, running, but this process
-    // cannot see it" — is the one that actually happens. A GUI-launched app
-    // gets launchd's PATH, so `docker` at /usr/local/bin is invisible to it and
-    // every failure reported as "no Docker daemon" on a machine running one.
-    const cli = await this.probe('command -v docker')
-    if (!cli) {
-      return {
-        ok: false,
-        reason:
-          'The docker command was not found. Install Docker Desktop or Colima ' +
-          '(brew install colima), then restart Harbor.'
-      }
-    }
-
-    if (await this.probe('docker version --format "{{.Server.Version}}"')) return { ok: true }
-
-    const colima = await this.probe('colima status')
-    return {
-      ok: false,
-      reason: colima
-        ? 'Colima is installed but not running — start it with: colima start'
-        : 'Docker is installed but its daemon is not responding — start Docker Desktop or Colima'
-    }
-  }
-
-  async colimaStart(): Promise<void> {
-    await exec('colima start --cpu 2 --memory 4', { maxBuffer: 16 * 1024 * 1024 })
+    const reason = await this.runtimes.unavailableReason()
+    return reason ? { ok: false, reason } : { ok: true }
   }
 
   /**
@@ -133,29 +147,17 @@ export class DockerBackend implements Backend<DockerStartOptions> {
   async start(options: DockerStartOptions): Promise<ProcessHandle> {
     const { ref, displayName } = options
     const { file, project } = this.writeComposeFile(ref.owner)
-    await exec(`docker compose -p ${project} -f "${file}" up -d ${ref.serviceId}`, {
-      maxBuffer: 16 * 1024 * 1024
-    })
+    await this.compose(project, file, ['up', '-d', ref.serviceId])
+    const { bin, compose, env } = await this.cli()
 
     // Container logs are streamed through ProcessManager so they land in the
     // unified viewer exactly like a native service's stdout.
     return this.processes.spawn({
       owner: { kind: 'service', id: instanceKey(ref) },
       label: displayName,
-      command: 'docker',
-      args: [
-        'compose',
-        '-p',
-        project,
-        '-f',
-        file,
-        'logs',
-        '-f',
-        '--no-color',
-        '--tail',
-        '50',
-        ref.serviceId
-      ]
+      command: bin,
+      args: [...compose, '-p', project, '-f', file, 'logs', '-f', '--no-color', '--tail', '50', ref.serviceId],
+      env: env as Record<string, string>
     })
   }
 
@@ -164,18 +166,21 @@ export class DockerBackend implements Backend<DockerStartOptions> {
     if (handle) await this.processes.stop(handle.id)
     const compose = this.composeFile(ref.owner)
     if (!compose) return
-    await exec(
-      `docker compose -p ${compose.project} -f "${compose.file}" stop ${ref.serviceId}`
-    ).catch(() => undefined)
+    await this.compose(compose.project, compose.file, ['stop', ref.serviceId]).catch(
+      () => undefined
+    )
   }
 
   async containerState(ref: ServiceInstanceRef): Promise<string | null> {
     const compose = this.composeFile(ref.owner)
     if (!compose) return null
     try {
-      const { stdout } = await exec(
-        `docker compose -p ${compose.project} -f "${compose.file}" ps --format json ${ref.serviceId}`
-      )
+      const stdout = await this.compose(compose.project, compose.file, [
+        'ps',
+        '--format',
+        'json',
+        ref.serviceId
+      ])
       const first = stdout.trim().split('\n')[0]
       if (!first) return null
       return (JSON.parse(first) as { State?: string }).State ?? null
@@ -194,9 +199,10 @@ export class DockerBackend implements Backend<DockerStartOptions> {
   async exec(ref: ServiceInstanceRef, command: string[], stdin?: string): Promise<string> {
     const compose = this.composeFile(ref.owner)
     if (!compose) throw new Error(`No compose file for ${ref.owner}`)
+    const { bin, compose: composeArgs, env } = await this.cli()
     return new Promise<string>((resolve, reject) => {
-      const child = spawn('docker', [
-        'compose',
+      const child = spawn(bin, [
+        ...composeArgs,
         '-p',
         compose.project,
         '-f',
@@ -206,7 +212,7 @@ export class DockerBackend implements Backend<DockerStartOptions> {
         '-T',
         ref.serviceId,
         ...command
-      ])
+      ], { env })
       let out = ''
       let err = ''
       child.stdout.on('data', (c: Buffer) => (out += c.toString()))
@@ -230,18 +236,26 @@ export class DockerBackend implements Backend<DockerStartOptions> {
    */
   async down(composeProject: string, options: { volumes?: boolean } = {}): Promise<void> {
     const file = join(composeDir(composeProject), 'docker-compose.json')
-    const flags = options.volumes ? ' --volumes' : ''
-    const target = existsSync(file) ? `-f "${file}"` : ''
-    await exec(`docker compose -p ${composeProject} ${target} down${flags}`, {
-      maxBuffer: 16 * 1024 * 1024
-    }).catch(() => undefined)
+    const { bin, compose, env } = await this.cli().catch(() => null) ?? {}
+    if (!bin || !compose) return
+    const args = [
+      ...compose,
+      '-p',
+      composeProject,
+      ...(existsSync(file) ? ['-f', file] : []),
+      'down',
+      ...(options.volumes ? ['--volumes'] : [])
+    ]
+    await execFile(bin, args, { env, maxBuffer: 16 * 1024 * 1024 }).catch(() => undefined)
     if (options.volumes) rmSync(composeDir(composeProject), { recursive: true, force: true })
   }
 
   /** Compose projects the daemon currently knows about, by name. */
   async listProjects(): Promise<string[]> {
     try {
-      const { stdout } = await exec('docker compose ls --all --format json', {
+      const { bin, compose, env } = await this.cli()
+      const { stdout } = await execFile(bin, [...compose, 'ls', '--all', '--format', 'json'], {
+        env,
         maxBuffer: 16 * 1024 * 1024
       })
       const parsed = JSON.parse(stdout) as Array<{ Name?: string }>
@@ -254,8 +268,18 @@ export class DockerBackend implements Backend<DockerStartOptions> {
   /** Named volumes belonging to a compose project, e.g. after a teardown. */
   async listVolumes(composeProject: string): Promise<string[]> {
     try {
-      const { stdout } = await exec(
-        `docker volume ls --filter label=com.docker.compose.project=${composeProject} --format "{{.Name}}"`
+      const { bin, env } = await this.cli()
+      const { stdout } = await execFile(
+        bin,
+        [
+          'volume',
+          'ls',
+          '--filter',
+          `label=com.docker.compose.project=${composeProject}`,
+          '--format',
+          '{{.Name}}'
+        ],
+        { env }
       )
       return stdout.trim().split('\n').filter(Boolean)
     } catch {
@@ -263,13 +287,5 @@ export class DockerBackend implements Backend<DockerStartOptions> {
     }
   }
 
-  private async probe(cmd: string): Promise<boolean> {
-    try {
-      await exec(cmd)
-      return true
-    } catch {
-      return false
-    }
-  }
 }
 

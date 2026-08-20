@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import type { Project } from '../../shared/project.js'
 import type { ServiceInstance, ServiceInstanceKey } from '../../shared/service.js'
 import type { RuntimeId } from '../../shared/runtime.js'
+import { AUTO_RUNTIME } from '../../shared/container-runtime.js'
 import { paths, ensureDirs, composeProjectName } from './paths.js'
 
 /** Bump when a shape change needs `migrate()` to touch existing state. */
@@ -42,6 +43,13 @@ export interface PersistedState {
     /** Ports the generated vhosts listen on. 80/443 need a root nginx. */
     httpPort: number
     httpsPort: number
+    /**
+     * Which container runtime to use, or `auto`. An explicit choice is honoured
+     * even when that runtime is not running: quietly creating a user's
+     * containers on a different daemon than the one they picked is worse than
+     * telling them to start it.
+     */
+    containerRuntime: string
   }
 }
 
@@ -58,7 +66,8 @@ export const EMPTY_STATE: PersistedState = {
     parkedDirs: [],
     autoStartServices: false,
     httpPort: 80,
-    httpsPort: 443
+    httpsPort: 443,
+    containerRuntime: AUTO_RUNTIME
   }
 }
 

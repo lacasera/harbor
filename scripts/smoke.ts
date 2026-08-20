@@ -21,6 +21,8 @@ import { interpolate, defaultsFor, validate } from '../src/main/services/registr
 import { EMPTY_STATE, STATE_VERSION, migrate } from '../src/main/core/config-store.js'
 import { assertOpenable } from '../src/shared/external-url.js'
 import { checkManagedUpdate } from '../src/main/runtimes/updates.js'
+import { pickRuntime } from '../src/main/containers/index.js'
+import { AUTO_RUNTIME } from '../src/shared/container-runtime.js'
 import { matchVersion } from '../src/main/runtimes/version-resolver.js'
 import { EloquentErdAnalyzer, tableize } from '../src/main/intelligence/eloquent-erd.js'
 import { parseEntity, snakeCase } from '../src/main/intelligence/doctrine-erd.js'
@@ -889,6 +891,54 @@ check('a site with a real certificate still gets TLS', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ── container runtimes ───────────────────────────────────────────────────
+
+const RUNTIMES = [{ id: 'docker-desktop' }, { id: 'orbstack' }, { id: 'colima' }, { id: 'podman' }]
+const found = (
+  entries: Array<[string, boolean, boolean]>
+): Map<string, { installed: boolean; running: boolean }> =>
+  new Map(entries.map(([id, installed, running]) => [id, { installed, running }]))
+
+check('auto prefers a runtime that is actually running', () => {
+  const picked = pickRuntime(
+    AUTO_RUNTIME,
+    RUNTIMES,
+    found([
+      ['docker-desktop', true, false],
+      ['colima', true, true]
+    ])
+  )
+  assert.equal(picked?.id, 'colima')
+})
+
+check('auto falls back to one that is merely installed', () => {
+  // So the advice can be "start it" rather than "install something".
+  const picked = pickRuntime(AUTO_RUNTIME, RUNTIMES, found([['podman', true, false]]))
+  assert.equal(picked?.id, 'podman')
+})
+
+check('auto picks nothing when nothing is there', () => {
+  assert.equal(pickRuntime(AUTO_RUNTIME, RUNTIMES, found([])), null)
+})
+
+check('an explicit choice is honoured even when it is not running', () => {
+  // Falling back would create the user's containers on a daemon they did not
+  // choose — with their data on it, and no indication that happened.
+  const picked = pickRuntime(
+    'podman',
+    RUNTIMES,
+    found([
+      ['docker-desktop', true, true],
+      ['podman', true, false]
+    ])
+  )
+  assert.equal(picked?.id, 'podman')
+})
+
+check('an explicit choice of something unknown resolves to nothing', () => {
+  assert.equal(pickRuntime('nerdctl', RUNTIMES, found([['docker-desktop', true, true]])), null)
 })
 
 // ── update checks ────────────────────────────────────────────────────────

@@ -11,7 +11,6 @@ const TOOLS: Array<{ bin: string; needed: string; install: string; required: boo
   { bin: 'nginx', needed: 'serving every site', install: 'brew install nginx', required: true },
   { bin: 'dnsmasq', needed: 'resolving .test domains', install: 'brew install dnsmasq', required: false },
   { bin: 'mkcert', needed: 'trusted HTTPS', install: 'brew install mkcert', required: false },
-  { bin: 'docker', needed: 'databases and other container services', install: 'brew install colima', required: false }
 ]
 
 async function which(bin: string): Promise<string | null> {
@@ -148,17 +147,27 @@ export async function runDiagnostics(harbor: HarborApp): Promise<Diagnostic[]> {
     required: false
   })
 
-  if (found.get('docker')) {
-    const docker = await harbor.docker.available()
-    out.push({
-      id: 'docker',
-      label: 'Container runtime',
-      status: docker.ok ? 'ok' : 'warn',
-      detail: docker.ok ? 'daemon is responding' : (docker.reason ?? 'not available'),
-      remedy: docker.ok ? undefined : 'Start Docker Desktop, or `colima start`',
-      required: false
-    })
-  }
+  // Asked of the runtime registry, not of `docker` directly: the user may have
+  // chosen Podman, or OrbStack, and naming a product they did not pick is how
+  // "install Colima" ended up in front of someone running Docker Desktop.
+  const runtimes = await harbor.containers.describeAll().catch(() => [])
+  const active = runtimes.find((r) => r.selected)
+  out.push({
+    id: 'container-runtime',
+    label: 'Container runtime',
+    status: active?.running ? 'ok' : 'warn',
+    detail: active
+      ? `${active.displayName} — ${active.detail}`
+      : 'none installed — services that need containers are unavailable',
+    remedy: active?.running
+      ? undefined
+      : active
+        ? active.startable
+          ? `Start ${active.displayName} from Settings`
+          : `Open ${active.displayName}`
+        : 'Choose and install one in Settings',
+    required: false
+  })
 
   return out
 }
