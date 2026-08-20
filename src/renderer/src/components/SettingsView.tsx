@@ -74,6 +74,8 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const [runtimeBusy, setRuntimeBusy] = useState<string | null>(null)
   /** `auto`, or the id of a runtime the user picked deliberately. */
   const preference = settings?.containerRuntime ?? AUTO_RUNTIME
+  /** The runtime currently in use, whether chosen automatically or pinned. */
+  const active = runtimes.find((r) => r.selected) ?? null
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [checking, setChecking] = useState(false)
 
@@ -282,10 +284,22 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 <Toggle
                   on={preference === AUTO_RUNTIME}
                   label="Choose the container runtime automatically"
-                  disabled={runtimeBusy !== null}
+                  // Nothing detected means nothing to pin, so there is no
+                  // meaningful off state to offer.
+                  disabled={runtimeBusy !== null || !active}
                   onChange={(on) => {
-                    if (!on) return
-                    void runRuntime('auto', () => invoke('containers:select', AUTO_RUNTIME))
+                    if (on) {
+                      void runRuntime('auto', () => invoke('containers:select', AUTO_RUNTIME))
+                      return
+                    }
+                    /*
+                     * Turning automatic off means "keep what I have now": pin
+                     * whatever auto resolved to. Doing nothing — which is what
+                     * this used to do — made a switch that could be turned on
+                     * and never off, and read as simply broken.
+                     */
+                    if (!active) return
+                    void runRuntime(active.id, () => invoke('containers:select', active.id))
                   }}
                 />
               </div>
