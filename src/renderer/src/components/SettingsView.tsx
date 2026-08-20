@@ -314,7 +314,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                     </div>
                   )}
                 </div>
-                <div className="v hstack" style={{ gap: 8, justifyContent: 'flex-end' }}>
+                <div className="v hstack" style={{ gap: 8 }}>
                   <span className="small muted">{rt.detail}</span>
                   {/* Only offered when Harbor can genuinely do it: a GUI app has
                       to be opened by the user, and saying otherwise is a button

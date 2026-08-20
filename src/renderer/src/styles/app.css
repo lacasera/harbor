@@ -647,6 +647,24 @@
   min-width: 0;
 }
 
+/*
+ * On a settings-style page the value belongs at the end of its row.
+ *
+ * These rows are label-and-value pairs, and reading one means pairing the two
+ * ends of a line — so values that start immediately after the label column
+ * leave a ragged right edge and every row scanning differently. The rows that
+ * carry buttons were already end-aligned, which left a lone toggle stranded
+ * mid-row looking like a mistake.
+ *
+ * Scoped to `.card-columns` on purpose: the generated service config forms use
+ * the same rows inside `.two-col`, and there the control belongs near its label
+ * rather than a long way across a wide pane.
+ */
+.card-columns .row .v {
+  justify-content: flex-end;
+  text-align: right;
+}
+
 .stat-row {
   display: flex;
   align-items: center;
