@@ -317,6 +317,48 @@ build resolves against node while its worker resolves against php.
 `ProcessOwner` gained a `role`, since a project now owns several processes and
 "is the site up?" must not be answered by its queue worker.
 
+## Custom services — planned, not started
+
+Users must be able to add a service Harbor does not ship. The case that
+motivates it: a project that depends on other microservices from the same
+company — an auth service, a billing service — which will never be in anyone's
+catalogue but are exactly as much a part of running the project locally as its
+database is.
+
+The driver model already carries most of this. A `DockerServiceSpec` is data:
+image, ports, environment, volumes, health, `envHints`. A user-authored spec is
+the same data, entered through a form rather than committed to
+`data-catalog.ts` — and once it exists it gets the card, the generated config
+form, the log wiring, the `.env` export, the per-project instances, the compose
+fragment and the console link for free, because every one of those is generated
+from the metadata. That is the payoff for having pushed the variation into
+drivers, and it is the reason this should be small.
+
+- [ ] **C.1** Persist user-defined specs in `ConfigStore`, in an id namespace
+  that cannot collide with a built-in — a shipped service later taking the same
+  id must not silently replace someone's own. Register them alongside
+  `CONTAINER_RUNTIMES`-style built-ins at startup.
+- [ ] **C.2** A form to author one: image and tag, ports, environment, volumes,
+  and the `.env` keys it should export. The last of those is the part that
+  makes it useful rather than just "a container Harbor starts".
+- [ ] **C.3** Import from a compose file. Most teams already have one, and
+  retyping a service definition Harbor could read is the kind of friction that
+  stops a feature being used.
+- [ ] **C.4** Decide what a non-container custom service is. A sibling repo run
+  with `npm start` is not a `DockerServiceSpec`; it is closer to a companion
+  process, or to a second parked project with a `reverse-proxy` serve model.
+  Answer this before building C.2, because it decides whether "custom service"
+  is one concept or two.
+- [ ] **C.5** Health for something Harbor knows nothing about: let the author
+  pick between a TCP port, an HTTP path, and a command, which is what the
+  built-in specs already choose between.
+
+Open question worth settling first: whether a custom service is per-project or
+shared. Per-project matches everything else and is the safe default, but a
+company's auth service is genuinely one thing several projects point at — and
+that is the first real case for an instance owned by something other than a
+project.
+
 ## Verification
 
 | Command | Covers |
