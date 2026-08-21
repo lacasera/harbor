@@ -139,7 +139,15 @@ export function ServiceInstancePanel({
           <div className="hstack" style={{ gap: 8, marginTop: 3 }}>
             <span className="hstack" style={{ gap: 6, fontSize: 12, color: 'var(--tx2)' }}>
               <StatusDot status={busy ? 'busy' : status} />
-              {running ? 'Healthy' : instance.installed ? 'Stopped' : 'Not installed'}
+              {busy
+                ? running
+                  ? 'Stopping…'
+                  : 'Starting…'
+                : running
+                  ? 'Healthy'
+                  : instance.installed
+                    ? 'Stopped'
+                    : 'Not installed'}
             </span>
             <span className="mono small" style={{ color: running ? 'var(--gn)' : 'var(--tx3)' }}>
               {instance.status.detail ?? instance.status.error ?? 'no health data'}

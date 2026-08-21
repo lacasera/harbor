@@ -661,7 +661,7 @@ export class NginxManager {
    * and a master started by this user reloads fine as this user. Escalate only
    * if the unprivileged reload is refused.
    */
-  async reload(): Promise<void> {
+  async reload(options: { escalate?: boolean } = {}): Promise<void> {
     // Gated on syntax alone. A root-started master owns the log files, so the
     // unprivileged test fails on a perfectly valid config — and gating on that
     // meant every reload threw and every vhost change silently never took
@@ -679,9 +679,24 @@ export class NginxManager {
     const binary = this.native.which('nginx')
     try {
       await exec(`${binary} -s reload`)
+      return
     } catch {
-      await this.privileged.run(`${binary} -s reload`)
+      /* a root-started master will not take a signal from this user */
     }
+
+    /*
+     * Escalating is opt-in.
+     *
+     * A password prompt is the right cost for an action the user explicitly
+     * asked for — connecting nginx, changing the ports it listens on. It is the
+     * wrong cost for a side effect of something else: removing a project put an
+     * unexplained authentication dialog on screen, and in a headless run it
+     * simply blocked forever waiting for a password nobody was there to type.
+     */
+    if (options.escalate === false) {
+      throw new Error('nginx needs to be reloaded as root; skipped')
+    }
+    await this.privileged.run(`${binary} -s reload`)
   }
 
   /**

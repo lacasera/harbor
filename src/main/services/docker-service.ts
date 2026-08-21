@@ -65,6 +65,17 @@ export interface DockerServiceSpec {
   healthPortIndex?: number
   /** Treated as healthy; some services return 503 while still usable locally. */
   healthAcceptStatuses?: number[]
+  /**
+   * A command, run inside the container, that proves the service can actually
+   * be used.
+   *
+   * `healthTcp` cannot: Docker's port proxy binds the published port the moment
+   * the container starts, so a TCP connect succeeds while the server inside is
+   * still initialising. Harbor reported MySQL as "accepting connections" a full
+   * second and a half before it would answer a query — and far longer than that
+   * on a first run.
+   */
+  readyCheck?(instance: ServiceInstance): string[]
   /** The service's own web UI, if it has one. See `consoleAt`. */
   console?(instance: ServiceInstance): ServiceConsole | null
   /**
@@ -92,6 +103,17 @@ export const EXTRA_CONFIG = 'extraConfig'
 
 export class DockerServiceDriver implements ServiceDriver {
   readonly backend = 'docker' as const
+
+  /**
+   * Instances confirmed usable since their container last started.
+   *
+   * A memo, not state the driver acts on — it holds no notion of "the" running
+   * instance, which is what made drivers single-instance before. The readiness
+   * command costs a `docker exec`, so it is asked once per container start and
+   * the cheap check carries it from there; the entry is dropped as soon as the
+   * container is not running, which a stop/start cycle always passes through.
+   */
+  private readonly confirmedReady = new Set<string>()
 
   constructor(
     private readonly docker: DockerBackend,
@@ -320,13 +342,39 @@ export class DockerServiceDriver implements ServiceDriver {
     )
   }
 
+  /**
+   * Whether the service inside the container will actually answer.
+   *
+   * Confirmed once per container start; a `docker exec` on every health poll,
+   * for every instance, is more subprocess churn than the answer is worth once
+   * it is known.
+   */
+  private async isReady(instance: ServiceInstance): Promise<boolean> {
+    if (!this.spec.readyCheck) return true
+    const key = `${instance.owner}:${instance.serviceId}`
+    if (this.confirmedReady.has(key)) return true
+
+    const ref = { owner: instance.owner, serviceId: instance.serviceId }
+    const ok = await this.docker
+      .exec(ref, this.spec.readyCheck(instance))
+      .then(() => true)
+      .catch(() => false)
+    if (ok) this.confirmedReady.add(key)
+    return ok
+  }
+
   async healthCheck(instance: ServiceInstance): Promise<ServiceStatus> {
     const ref = { owner: instance.owner, serviceId: instance.serviceId }
     const state = await this.docker.containerState(ref)
-    if (!state) return { health: 'stopped', ports: [] }
+    if (!state) {
+      this.confirmedReady.delete(`${instance.owner}:${instance.serviceId}`)
+      return { health: 'stopped', ports: [] }
+    }
 
     const lower = state.toLowerCase()
     if (lower !== 'running') {
+      // A stop always passes through here, so the next start re-confirms.
+      this.confirmedReady.delete(`${instance.owner}:${instance.serviceId}`)
       return { health: lower === 'restarting' ? 'starting' : 'stopped', ports: [] }
     }
 
@@ -337,9 +385,14 @@ export class DockerServiceDriver implements ServiceDriver {
       const open = await portAccepts(healthPort)
       // A container that is up but not yet listening is starting, not broken:
       // Postgres and MySQL both take seconds to initialise on first run.
-      return open
+      if (!open) {
+        return { health: 'starting', ports, detail: 'container up, waiting for the port' }
+      }
+
+      const ready = await this.isReady(instance)
+      return ready
         ? { health: 'running', ports, detail: `accepting connections on :${healthPort}` }
-        : { health: 'starting', ports, detail: 'container up, waiting for the port' }
+        : { health: 'starting', ports, detail: 'port is open, server still starting' }
     }
 
     if (!this.spec.healthPath) {

@@ -152,6 +152,7 @@ export const MYSQL: DockerServiceSpec = {
     command: ['mysql', '-uroot', '--protocol=socket'],
     stdin: sqlBootstrap(instance.values)
   }),
+  readyCheck: () => ['mysqladmin', 'ping', '-uroot', '--protocol=socket', '--silent'],
   configSchema: {
     type: 'object',
     properties: { port: portField('Port', 3306), ...sqlAuth, ...binlogFields },
@@ -203,6 +204,7 @@ export const MARIADB: DockerServiceSpec = {
     command: ['mariadb', '-uroot', '--protocol=socket'],
     stdin: sqlBootstrap(instance.values)
   }),
+  readyCheck: () => ['mariadb-admin', 'ping', '-uroot', '--protocol=socket', '--silent'],
   configSchema: {
     // Defaults to 3307 so it can run beside MySQL.
     type: 'object',
@@ -249,6 +251,7 @@ export const POSTGRES: DockerServiceSpec = {
   // Postgres takes settings as `-c key=value`, which is exactly what the extra
   // arguments field is for; it has no drop-in conf.d in the official image.
   commandBase: ['postgres'],
+  readyCheck: (instance) => ['pg_isready', '-U', String(instance.values.username ?? 'harbor')],
   // `POSTGRES_DB` has the same first-init-only behaviour as MySQL's. The role
   // is already a superuser, so only the database itself needs reconciling.
   bootstrap: (instance) => {

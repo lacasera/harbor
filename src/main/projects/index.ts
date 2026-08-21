@@ -267,7 +267,11 @@ export class ProjectManager extends EventEmitter {
     if ((written || removed) && this.nginx.isConnected()) {
       const check = await this.nginx.test()
       if (check.syntaxOk) {
-        await this.nginx.reload().catch((err: Error) => {
+        // Never escalating. This runs on every launch and after every park,
+        // and a password prompt as a side effect of starting the app is not
+        // something the user asked for. When nginx needs root to reload, that
+        // is reported and the user can do it deliberately from Settings.
+        await this.nginx.reload({ escalate: false }).catch((err: Error) => {
           configError = err.message
         })
       } else {
@@ -356,7 +360,18 @@ export class ProjectManager extends EventEmitter {
     // Removing the vhost file is not enough on its own: nginx serves the config
     // it loaded, so without this the site of a forgotten project keeps
     // answering until something else happens to reload.
-    await this.nginx.reload().catch(() => undefined)
+    //
+    // Never escalating, though. Reloading a root-started master needs a
+    // password, and demanding one because a project was removed is a prompt the
+    // user did not ask for — and one that blocks forever when nobody is there
+    // to answer it. The site stops being served at the next reload instead.
+    await this.nginx.reload({ escalate: false }).catch(() => {
+      this.deps.logs.push(
+        'harbor',
+        'nginx',
+        `${project.name} was removed but nginx still holds its old config — restart nginx to drop it`
+      )
+    })
 
     // Emitted last, so anything listening sees a store the project is already
     // gone from rather than one it is still in.
