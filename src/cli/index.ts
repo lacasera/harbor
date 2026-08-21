@@ -7,7 +7,7 @@
  * state and this is not it.
  */
 import { connect } from 'node:net'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -144,18 +144,68 @@ const fail = (message: string): never => {
   process.exit(1)
 }
 
-/** Resolve a project by name, domain, or the directory you are standing in. */
-async function findProject(name?: string): Promise<Project> {
+/** The project a command applies to, and how that was decided. */
+interface Scope {
+  project: Project
+  source: 'argument' | 'HARBOR_PROJECT' | 'directory'
+}
+
+/**
+ * Resolve which project a command is about.
+ *
+ * In order: what you typed, the scope you set, then where you are standing.
+ * Argument first because it is the most explicit thing in the room — a scope
+ * that could override an argument would make `harbor env other-project` a lie.
+ */
+async function resolveScope(name?: string, options: { soft?: boolean } = {}): Promise<Scope | null> {
+  /** Report and stop, unless the caller only wanted to know. */
+  const give = (message: string): null => {
+    if (options.soft) return null
+    return fail(message)
+  }
+
   const projects = await call<Project[]>('projects:list')
-  const wanted = name ?? basename(process.cwd())
-  const byPath = projects.find((p) => p.path === process.cwd())
-  const match =
-    projects.find((p) => p.name === wanted || p.domain === wanted) ?? (name ? undefined : byPath)
-  if (!match) fail(`No project named "${wanted}". Try: harbor list`)
-  return match as Project
+  const byName = (wanted: string): Project | undefined =>
+    projects.find((p) => p.name === wanted || p.domain === wanted)
+
+  if (name) {
+    const match = byName(name)
+    if (!match) return give(`No project named "${name}". Try: harbor list`)
+    return { project: match, source: 'argument' }
+  }
+
+  const scoped = process.env.HARBOR_PROJECT
+  if (scoped) {
+    const match = byName(scoped)
+    if (!match) return give(`HARBOR_PROJECT is set to "${scoped}", which is not a project.`)
+    return { project: match, source: 'HARBOR_PROJECT' }
+  }
+
+  // Walk up. Matching only the exact directory meant that standing anywhere
+  // inside a project — its `app` folder, its `public` folder — found nothing,
+  // which is most of the time you are actually in one.
+  let dir = process.cwd()
+  for (;;) {
+    const match = projects.find((p) => p.path === dir)
+    if (match) return { project: match, source: 'directory' }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+
+  return give('Not inside a project. Name one, or set a scope:\n  eval "$(harbor scope <name>)"')
+}
+
+async function findProject(name?: string): Promise<Project> {
+  return (await resolveScope(name))!.project
 }
 
 const HELP = `harbor — local development platform
+
+  harbor scope [name]              show the project commands apply to,
+                                   or print the line to set it:
+                                     eval "$(harbor scope api)"
+                                   harbor scope --clear to drop it
 
   harbor status                    what is installed, running and wrong
   harbor list                      parked and linked projects
@@ -175,6 +225,9 @@ const HELP = `harbor — local development platform
   harbor logs [--lines N]          recent output from everything
   harbor tld [name]                show or change the local TLD
   harbor restart nginx|dns         restart a piece of the plumbing
+
+Commands taking [name] use it if given, then HARBOR_PROJECT, then the
+project containing the directory you are in.
 
   --json                           machine-readable output for any command`
 
@@ -214,6 +267,49 @@ async function main(): Promise<void> {
         out(`  ${p.name.padEnd(22)} ${p.url.padEnd(34)} ${state}`)
       }
       return
+    }
+
+    /*
+     * Scope is an environment variable, not something Harbor remembers.
+     *
+     * A remembered "current project" is one setting shared by every terminal:
+     * set it in one window, and a `harbor forget` in another — with no argument
+     * and nothing on screen to say why — removes a project you were not looking
+     * at. A variable belongs to the shell that set it, which is the boundary
+     * people already expect from `cd` and from every version manager.
+     */
+    case 'scope': {
+      if (params[0] === '--clear' || params[0] === 'off') {
+        return out(json ? { clear: true } : 'unset HARBOR_PROJECT')
+      }
+      if (params[0]) {
+        const project = await findProject(params[0])
+        if (json) return out({ project: project.name })
+        // Printed for eval rather than executed: a child process cannot change
+        // its parent shell's environment, and pretending otherwise would leave
+        // the user wondering why nothing happened.
+        return out(`export HARBOR_PROJECT=${project.name}`)
+      }
+      // Asking what the scope is should never be an error: "nothing" is a
+      // perfectly good answer to that question.
+      const scope = await resolveScope(undefined, { soft: true })
+      if (!scope) {
+        return out(
+          json
+            ? { project: null, source: null }
+            : 'No project in scope. Stand in one, or: eval "$(harbor scope <name>)"'
+        )
+      }
+      const how = {
+        argument: 'named on the command line',
+        HARBOR_PROJECT: 'set by HARBOR_PROJECT',
+        directory: `from the directory you are in (${scope.project.path})`
+      }
+      return out(
+        json
+          ? { project: scope.project.name, source: scope.source }
+          : `${scope.project.name} — ${how[scope.source]}`
+      )
     }
 
     case 'paths': {
