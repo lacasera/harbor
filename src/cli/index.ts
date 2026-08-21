@@ -7,8 +7,12 @@
  * state and this is not it.
  */
 import { connect } from 'node:net'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+
+import { promisify } from 'node:util'
 
 const SOCKET = join(homedir(), '.harbor', 'run', 'harbor.sock')
 
@@ -16,6 +20,52 @@ interface Reply {
   id: number
   result?: unknown
   error?: string
+}
+
+/**
+ * The app bundle this command belongs to.
+ *
+ * The launcher runs the app's own binary, so `process.execPath` is inside the
+ * bundle — walking up to the `.app` is how the command finds the application it
+ * is part of, without hardcoding /Applications or reading a config file.
+ */
+function appBundle(): string | null {
+  let dir = dirname(process.execPath)
+  for (let i = 0; i < 5; i++) {
+    if (dir.endsWith('.app') && existsSync(join(dir, 'Contents', 'MacOS'))) return dir
+    dir = dirname(dir)
+  }
+  return null
+}
+
+/**
+ * Start Harbor without showing a window, and wait for it to answer.
+ *
+ * The app is what serves the user's sites, so a command that needs it is
+ * really asking for the daemon. `-g` keeps it out of the foreground and
+ * `--hidden` keeps the window closed: running `harbor list` should not throw a
+ * window in front of whatever the user was doing.
+ */
+async function startApp(): Promise<boolean> {
+  const bundle = appBundle()
+  if (!bundle || !bundle.endsWith('Harbor.app')) return false
+
+  await promisify(execFile)('/usr/bin/open', ['-g', '-a', bundle, '--args', '--hidden']).catch(
+    () => undefined
+  )
+
+  // Starting takes a moment; a fixed sleep would be either a stall or a
+  // coin toss, so wait for the socket to actually answer.
+  for (let i = 0; i < 60; i++) {
+    if (existsSync(SOCKET)) {
+      const answered = await call<unknown>('app:info')
+        .then(() => true)
+        .catch(() => false)
+      if (answered) return true
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return false
 }
 
 /** One request, one reply, one connection. Commands are not chatty. */
@@ -36,7 +86,7 @@ function call<T>(channel: string, args: unknown[] = []): Promise<T> {
     socket.on('error', (err: NodeJS.ErrnoException) => {
       reject(
         err.code === 'ENOENT' || err.code === 'ECONNREFUSED'
-          ? new Error('Harbor is not running. Open the app and try again.')
+          ? Object.assign(new Error('Harbor is not running.'), { notRunning: true })
           : err
       )
     })
@@ -312,7 +362,19 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((err: Error) => {
-  console.error(err.message)
-  process.exit(1)
+void main().catch(async (err: Error & { notRunning?: boolean }) => {
+  if (!err.notRunning) {
+    console.error(err.message)
+    process.exit(1)
+  }
+  // Start it and try once more, rather than telling the user to go and do it.
+  process.stderr.write('Starting Harbor…\n')
+  if (!(await startApp())) {
+    console.error('Could not start Harbor. Open the app and try again.')
+    process.exit(1)
+  }
+  await main().catch((second: Error) => {
+    console.error(second.message)
+    process.exit(1)
+  })
 })

@@ -86,6 +86,18 @@ export function registerIpc(
   handle('app:openExternal', (url) => openExternal(url))
   handle('app:diagnostics', () => runDiagnostics(harbor))
 
+  handle('app:loginItem', () => app.getLoginItemSettings().openAtLogin)
+  handle('app:setLoginItem', (enabled) => {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      // Hidden, because Harbor at login is there to serve sites, not to put a
+      // window in front of someone who has just sat down.
+      openAsHidden: true,
+      args: ['--hidden']
+    })
+    return app.getLoginItemSettings().openAtLogin
+  })
+
   // ── the harbor command ──────────────────────────────────────────────────
   handle('cli:status', () => cliStatus())
   handle('cli:link', async () => {

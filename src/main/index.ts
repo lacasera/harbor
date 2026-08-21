@@ -59,7 +59,21 @@ function windowSize(): {
   }
 }
 
-function createWindow(): BrowserWindow {
+/**
+ * Whether to come up without showing a window.
+ *
+ * Harbor is a daemon with a window, not a window with a daemon: it serves the
+ * user's sites whether or not anything is on screen. Started at login, or by a
+ * `harbor` command that needed it running, putting a window in front of the
+ * user is not what they asked for.
+ */
+function startsHidden(): boolean {
+  if (process.argv.includes('--hidden')) return true
+  const login = app.getLoginItemSettings()
+  return login.wasOpenedAtLogin || login.wasOpenedAsHidden
+}
+
+function createWindow(options: { show?: boolean } = {}): BrowserWindow {
   const size = windowSize()
   const win = new BrowserWindow({
     ...size,
@@ -78,7 +92,9 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  win.on('ready-to-show', () => win.show())
+  win.on('ready-to-show', () => {
+    if (options.show !== false) win.show()
+  })
 
   /*
    * Closing hides; it does not quit.
@@ -123,6 +139,29 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+/*
+ * One Harbor at a time.
+ *
+ * Two instances would each own ~/.harbor: both writing the same config, both
+ * starting the same daemons, each with its own idea of what is running — and
+ * whichever writes last wins while the other's changes vanish. A second launch
+ * raises the first instead, which is also what makes `harbor` safe to run while
+ * the app is open.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0)
+}
+
+app.on('second-instance', (_event, argv) => {
+  // The SECOND launch's arguments, not this process's — checking our own would
+  // ask whether the already-running instance was started hidden, which says
+  // nothing about what the new one wanted.
+  //
+  // Only surface a window if that launch meant to. A `harbor` command starting
+  // Harbor should not pull the user out of what they were doing.
+  if (!argv.includes('--hidden')) showWindow()
+})
+
 void app.whenReady().then(async () => {
   // Before anything else. A GUI-launched app inherits launchd's PATH, not the
   // user's, so every tool Harbor shells out to is invisible until this runs —
@@ -147,7 +186,7 @@ void app.whenReady().then(async () => {
   )
   await harbor.start()
 
-  window = createWindow()
+  window = createWindow({ show: !startsHidden() })
   tray = createTray(harbor, { show: showWindow, quit: () => app.quit() })
 
   // Reported at startup so a broken installation is visible in the log rather

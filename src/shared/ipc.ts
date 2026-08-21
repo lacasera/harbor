@@ -107,6 +107,14 @@ export interface IpcContract {
   'app:diagnostics': [[], Diagnostic[]]
 
   /** The `harbor` command: where it is, and whether it is on PATH. */
+  /**
+   * Start Harbor when the user logs in. Read from the operating system rather
+   * than mirrored in Harbor's config: the user can change it in System
+   * Settings too, and a copy would go stale without either side knowing.
+   */
+  'app:loginItem': [[], boolean]
+  'app:setLoginItem': [[enabled: boolean], boolean]
+
   'cli:status': [[], CliStatus]
   'cli:link': [[], CliStatus]
   'cli:unlink': [[], CliStatus]

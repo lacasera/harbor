@@ -77,6 +77,8 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const preference = settings?.containerRuntime ?? AUTO_RUNTIME
   /** The runtime currently in use, whether chosen automatically or pinned. */
   const active = runtimes.find((r) => r.selected) ?? null
+  const [loginItem, setLoginItem] = useState(false)
+  const [loginBusy, setLoginBusy] = useState(false)
   const [cli, setCli] = useState<CliStatus | null>(null)
   const [cliBusy, setCliBusy] = useState(false)
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
@@ -101,6 +103,7 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   useEffect(() => {
     void invoke('containers:list').then(setRuntimes)
     void invoke('cli:status').then(setCli)
+    void invoke('app:loginItem').then(setLoginItem)
   }, [])
 
   const runCli = useCallback(
@@ -277,6 +280,32 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="card">
+            <div className="section-label">Startup</div>
+            <div className="row">
+              <div>
+                <div className="k" style={{ color: 'var(--tx)' }}>Start when I log in</div>
+                <div className="hint">
+                  Opens in the menu bar without a window, so sites are served from login
+                </div>
+              </div>
+              <div className="v">
+                <Toggle
+                  on={loginItem}
+                  label="Start Harbor when I log in"
+                  disabled={loginBusy}
+                  onChange={(on) => {
+                    setLoginBusy(true)
+                    void invoke('app:setLoginItem', on)
+                      .then(setLoginItem)
+                      .catch((err: Error) => setError(err.message))
+                      .finally(() => setLoginBusy(false))
+                  }}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="card">
