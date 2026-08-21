@@ -6,10 +6,13 @@ import { resolveUserPath } from './core/shell-path.js'
 import { runDiagnostics } from './diagnostics.js'
 import { registerIpc } from './ipc/index.js'
 import { createTray } from './tray.js'
+import { installCli } from './cli/install.js'
+import { startCliServer, stopCliServer } from './cli/server.js'
 
 let window: BrowserWindow | null = null
 let harbor: HarborApp | null = null
 let tray: Tray | null = null
+let cliServer: import('node:net').Server | null = null
 /**
  * Set the moment a real quit begins, so `close` can tell the two apart.
  * Without it, closing the window and quitting the app are the same event and
@@ -131,7 +134,17 @@ void app.whenReady().then(async () => {
   if (resolved) {
     harbor.logs.push('harbor', 'startup', `PATH resolved from ${resolved.source}`)
   }
-  registerIpc(harbor, () => window)
+
+  // Rewritten every launch: it points at this app bundle, and the app can move.
+  const cli = installCli()
+  harbor.logs.push('harbor', 'startup', cli.ok ? `cli at ${cli.detail}` : `cli not installed — ${cli.detail}`)
+  const router = registerIpc(harbor, () => window)
+
+  // The `harbor` command reaches the same handlers the window does, so the two
+  // can never disagree about what is parked or running.
+  cliServer = startCliServer(router, (message) =>
+    harbor?.logs.push('harbor', 'cli', `socket error: ${message}`)
+  )
   await harbor.start()
 
   window = createWindow()
@@ -179,6 +192,7 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
       const instance = harbor
       harbor = null
       await instance?.shutdown().catch(() => undefined)
+      stopCliServer(cliServer)
       app.exit(0)
     })()
   })
@@ -198,6 +212,7 @@ app.on('before-quit', async (event) => {
   const instance = harbor
   harbor = null
   await instance.shutdown()
+  stopCliServer(cliServer)
   tray?.destroy()
   app.quit()
 })

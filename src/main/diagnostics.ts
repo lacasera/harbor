@@ -2,6 +2,7 @@ import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { Diagnostic } from '../shared/diagnostics.js'
 import type { HarborApp } from './app.js'
+import { cliStatus } from './cli/install.js'
 
 const execFile = promisify(execFileCb)
 
@@ -166,6 +167,20 @@ export async function runDiagnostics(harbor: HarborApp): Promise<Diagnostic[]> {
           ? `Start ${active.displayName} from Settings`
           : `Open ${active.displayName}`
         : 'Choose and install one in Settings',
+    required: false
+  })
+
+  const cli = cliStatus()
+  out.push({
+    id: 'cli',
+    label: 'harbor command',
+    status: cli.onPath ? 'ok' : cli.installed ? 'warn' : 'fail',
+    detail: !cli.installed
+      ? 'not installed'
+      : cli.linked
+        ? `linked at ${cli.linkPath}`
+        : `installed at ${cli.path}, not on PATH`,
+    remedy: cli.onPath ? undefined : 'Add it to PATH from Settings',
     required: false
   })
 

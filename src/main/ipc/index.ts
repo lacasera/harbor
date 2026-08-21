@@ -12,17 +12,29 @@ import { HARBOR_HOME } from '../core/paths.js'
 import { Updater } from '../updater.js'
 import { openExternal } from '../core/open-external.js'
 import { runDiagnostics } from '../diagnostics.js'
+import { cliStatus, linkCli, unlinkCli } from '../cli/install.js'
 import { readProjectEnv } from '../projects/env-file.js'
+
+/**
+ * Every channel, by name.
+ *
+ * The window is not the only caller any more: the CLI reaches the same
+ * handlers over a local socket. Registering into a map as well as into
+ * `ipcMain` means the two cannot drift — a command the UI can perform is a
+ * command the CLI can perform, with the same types and the same errors.
+ */
+export type IpcRouter = Map<string, (...args: unknown[]) => Promise<unknown>>
 
 /** Typed `handle` — the channel name pins both the args and the return type. */
 function makeHandle(
+  router: IpcRouter,
   onError: (channel: string, message: string) => void
 ): <C extends IpcChannel>(
   channel: C,
   fn: (...args: IpcArgs<C>) => Promise<IpcResult<C>> | IpcResult<C>
 ) => void {
   return (channel, fn) => {
-    ipcMain.handle(channel, async (_event, ...args) => {
+    const run = async (...args: unknown[]): Promise<unknown> => {
       try {
         return await fn(...(args as IpcArgs<typeof channel>))
       } catch (err) {
@@ -31,12 +43,18 @@ function makeHandle(
         onError(channel, (err as Error).message)
         throw err
       }
-    })
+    }
+    router.set(channel, run)
+    ipcMain.handle(channel, (_event, ...args) => run(...args))
   }
 }
 
-export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | null): void {
-  const handle = makeHandle((channel, message) => {
+export function registerIpc(
+  harbor: HarborApp,
+  getWindow: () => BrowserWindow | null
+): IpcRouter {
+  const router: IpcRouter = new Map()
+  const handle = makeHandle(router, (channel, message) => {
     harbor.logs.push('harbor', 'ipc', `${channel} failed: ${message}`)
   })
 
@@ -67,6 +85,17 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('app:checkForUpdates', () => updater.check())
   handle('app:openExternal', (url) => openExternal(url))
   handle('app:diagnostics', () => runDiagnostics(harbor))
+
+  // ── the harbor command ──────────────────────────────────────────────────
+  handle('cli:status', () => cliStatus())
+  handle('cli:link', async () => {
+    await linkCli(harbor.privileged)
+    return cliStatus()
+  })
+  handle('cli:unlink', async () => {
+    await unlinkCli(harbor.privileged)
+    return cliStatus()
+  })
 
   // ── container runtimes ──────────────────────────────────────────────────
   handle('containers:list', (force) => harbor.containers.describeAll(force))
@@ -262,6 +291,8 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
     await harbor.projects.nginx.disconnect()
     return harbor.projects.nginx.status()
   })
+
+  return router
 }
 
 /** Compile-time guard: every channel in the contract must be handled above. */

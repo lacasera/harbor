@@ -10,6 +10,7 @@ import { invoke } from '../ipc/client.js'
 import { StatusDot, Toggle } from './primitives.js'
 import { adviseTld } from '../../../shared/tld.js'
 import type { Diagnostic } from '../../../shared/diagnostics.js'
+import type { CliStatus } from '../../../shared/ipc.js'
 import type { ContainerRuntimeDescriptor } from '../../../shared/container-runtime.js'
 import { AUTO_RUNTIME } from '../../../shared/container-runtime.js'
 
@@ -76,6 +77,8 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
   const preference = settings?.containerRuntime ?? AUTO_RUNTIME
   /** The runtime currently in use, whether chosen automatically or pinned. */
   const active = runtimes.find((r) => r.selected) ?? null
+  const [cli, setCli] = useState<CliStatus | null>(null)
+  const [cliBusy, setCliBusy] = useState(false)
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [checking, setChecking] = useState(false)
 
@@ -97,7 +100,24 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
 
   useEffect(() => {
     void invoke('containers:list').then(setRuntimes)
+    void invoke('cli:status').then(setCli)
   }, [])
+
+  const runCli = useCallback(
+    async (fn: () => Promise<CliStatus>) => {
+      setCliBusy(true)
+      setError(null)
+      try {
+        setCli(await fn())
+        await refreshDiagnostics()
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setCliBusy(false)
+      }
+    },
+    [refreshDiagnostics]
+  )
 
   const runRuntime = useCallback(
     async (key: string, fn: () => Promise<ContainerRuntimeDescriptor[]>) => {
@@ -257,6 +277,60 @@ export function SettingsView({ version, homeDir }: { version: string; homeDir: s
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="card">
+            <div className="section-label">Command line</div>
+            <div className="row">
+              <div>
+                <div className="k" style={{ color: 'var(--tx)' }}>
+                  <span className="hstack" style={{ gap: 7 }}>
+                    <StatusDot
+                      status={cli?.onPath ? 'running' : cli?.installed ? 'busy' : 'stopped'}
+                      small
+                    />
+                    harbor
+                  </span>
+                </div>
+                <div className="hint">
+                  {cli?.installed
+                    ? cli.linked
+                      ? `Linked at ${cli.linkPath}`
+                      : `Installed at ${cli.path}`
+                    : 'Not installed'}
+                </div>
+                <div className="hint mono" style={{ marginTop: 4 }}>
+                  harbor list · harbor env · harbor status
+                </div>
+              </div>
+              <div className="v hstack" style={{ gap: 8 }}>
+                <span className="small muted">
+                  {cli?.onPath ? 'on your PATH' : cli?.installed ? 'not on PATH' : ''}
+                </span>
+                {/* Linking writes outside ~/.harbor and needs a password, so it
+                    is a button rather than something Harbor does on its own. */}
+                {cli?.installed && !cli.linked && (
+                  <button
+                    type="button"
+                    className="btn xs"
+                    disabled={cliBusy}
+                    onClick={() => void runCli(() => invoke('cli:link'))}
+                  >
+                    {cliBusy ? 'Linking…' : 'Add to PATH'}
+                  </button>
+                )}
+                {cli?.linked && (
+                  <button
+                    type="button"
+                    className="btn xs"
+                    disabled={cliBusy}
+                    onClick={() => void runCli(() => invoke('cli:unlink'))}
+                  >
+                    Remove link
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="card">

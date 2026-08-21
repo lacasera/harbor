@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run typecheck && electron-vite build && npm run build:cli",
+    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/cli/harbor.js --log-level=warning",
     "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=cjs --external:electron --outfile=node_modules/.cache/smoke.cjs --log-level=warning && node node_modules/.cache/smoke.cjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",

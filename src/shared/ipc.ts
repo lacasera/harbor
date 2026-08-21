@@ -24,6 +24,15 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 import type { Diagnostic } from './diagnostics.js'
+
+/** Where the `harbor` command lives and whether a shell can find it. */
+export interface CliStatus {
+  installed: boolean
+  path: string
+  linked: boolean
+  linkPath: string
+  onPath: boolean
+}
 import type { ContainerRuntimeDescriptor } from './container-runtime.js'
 
 export interface UpdateStatus {
@@ -96,6 +105,11 @@ export interface IpcContract {
   'app:openExternal': [[url: string], void]
   /** Everything Harbor depends on, and whether it is there. */
   'app:diagnostics': [[], Diagnostic[]]
+
+  /** The `harbor` command: where it is, and whether it is on PATH. */
+  'cli:status': [[], CliStatus]
+  'cli:link': [[], CliStatus]
+  'cli:unlink': [[], CliStatus]
 
   /** Container runtimes: what is available, and which one Harbor uses. */
   'containers:list': [[force?: boolean], ContainerRuntimeDescriptor[]]
