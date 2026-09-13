@@ -137,6 +137,13 @@ export class TunnelManager extends EventEmitter {
       )
     }
 
+    // A second start() for this project may have won the race while we awaited
+    // probe(). Reserving the slot only now — synchronously, with no await before
+    // spawn() — guarantees at most one provider process is ever tracked, so
+    // stop() always kills the live one and no public tunnel is orphaned.
+    const raced = this.tracked.get(projectId)
+    if (raced) return { ...raced.active }
+
     const tracked: Tracked = {
       active: {
         projectId,
@@ -162,7 +169,15 @@ export class TunnelManager extends EventEmitter {
     this.tracked.set(projectId, tracked)
     this.logs.push(projectId, 'tunnel', `exposing ${info.domain} via ${driver.displayName}`)
 
-    await this.spawn(tracked)
+    // A failed spawn must leave nothing behind, or the project stays stuck
+    // 'starting' with no process and can never be exposed again.
+    try {
+      await this.spawn(tracked)
+    } catch (err) {
+      if (tracked.restartTimer) clearTimeout(tracked.restartTimer)
+      this.tracked.delete(projectId)
+      throw err
+    }
     const url = await this.awaitUrl(tracked)
     if (!url) {
       this.logs.push(projectId, 'tunnel', 'no public URL yet — the provider is still connecting')
