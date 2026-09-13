@@ -599,10 +599,10 @@ function ProcessesTab({
       </div>
 
       <div className="proc-item-actions">
-        <label className="proc-auto" title="Start this with the project">
+        <label className="proc-auto" title="Start this automatically when Harbor launches">
           <Toggle
             on={p.enabled}
-            label={`Start ${p.label} with the project`}
+            label={`Start ${p.label} automatically when Harbor launches`}
             disabled={busy || working === p.id}
             onChange={(enabled) =>
               act(p.id, () => invoke('projects:updateProcess', project.id, p.id, { enabled }))

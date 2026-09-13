@@ -7,6 +7,9 @@ import type { PortAllocator } from './port-allocator.js'
 interface Managed {
   handle: ProcessHandle
   child: ChildProcess | null
+  /** Set once we've raised a port-conflict for this process, so a runtime that
+   *  repeats the message on stderr does not raise it again. */
+  portConflictReported: boolean
 }
 
 /**
@@ -64,7 +67,7 @@ export class ProcessManager extends EventEmitter {
     // so a signal aimed at the group does not take the daemon with it.
     if (req.detached) child.unref()
 
-    const managed: Managed = { handle, child }
+    const managed: Managed = { handle, child, portConflictReported: false }
     this.processes.set(id, managed)
     if (req.logStream) this.streams.set(id, req.logStream)
 
@@ -116,9 +119,38 @@ export class ProcessManager extends EventEmitter {
     const src = stream === 'stdout' ? child.stdout : child.stderr
     src?.setEncoding('utf8')
     src?.on('data', (chunk: string) => {
+      if (stream === 'stderr') this.detectPortConflict(handle, chunk)
       this.emit('log', { handle, stream: this.streams.get(handle.id) ?? stream, chunk })
     })
   }
+
+  /**
+   * A dev server whose port is already bound never emits a spawn error — the
+   * exec succeeds, then it crashes complaining on stderr. So the only reliable
+   * signal is the message itself, and it's phrased differently per runtime.
+   * When two auto-started processes want the same port, the first bound it and
+   * this is the loser; callers turn the event into a user-facing notice.
+   */
+  private detectPortConflict(handle: ProcessHandle, chunk: string): void {
+    const managed = this.processes.get(handle.id)
+    if (!managed || managed.portConflictReported) return
+    if (!ProcessManager.PORT_IN_USE.test(chunk)) return
+    managed.portConflictReported = true
+    // Prefer the port Harbor injected; otherwise read it off the message, but
+    // only when it trails an address (127.0.0.1:8000, :::3000, localhost:5173)
+    // so a line/column in a stack trace can't be mistaken for the port.
+    const parsed = ProcessManager.ADDR_PORT.exec(chunk)
+    const port = handle.port ?? (parsed ? Number(parsed[1]) : null)
+    this.emit('port-conflict', { handle: { ...handle }, port, detail: chunk.trim() })
+  }
+
+  /** Address-in-use, across Node (EADDRINUSE), Go/nginx ("address already in
+   *  use"), and PHP/artisan ("Address already in use"). */
+  private static readonly PORT_IN_USE = /EADDRINUSE|address already in use/i
+
+  /** A port trailing an address: `127.0.0.1:8000`, `:::3000`, `localhost:5173`,
+   *  `*:8080`. Anchored so a `file.js:120` in a stack trace is not read as one. */
+  private static readonly ADDR_PORT = /(?:\d{1,3}(?:\.\d{1,3}){3}|::|\blocalhost|\*):(\d{2,5})\b/
 
   private readonly streams = new Map<string, string>()
 

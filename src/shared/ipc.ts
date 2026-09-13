@@ -24,6 +24,7 @@ import type { ProcessHandle, ResourceUsage } from './process.js'
 import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 import type { Diagnostic } from './diagnostics.js'
+import type { Notice } from './notice.js'
 
 /** Where the `harbor` command lives and whether a shell can find it. */
 export interface CliStatus {
@@ -219,6 +220,13 @@ export interface IpcContract {
   'logs:sources': [[], string[]]
   'logs:clear': [[], void]
 
+  /**
+   * Notices raised before the window existed — chiefly boot-time port
+   * conflicts. Drained (and cleared) once as the renderer mounts; live ones
+   * after that arrive on the `notice` push.
+   */
+  'notices:drain': [[], Notice[]]
+
   'intelligence:analyze': [[projectId: string, force?: boolean], AnalysisResult[]]
   'intelligence:mermaid': [[projectId: string, kind: 'erDiagram' | 'classDiagram'], string]
 
@@ -264,6 +272,8 @@ export interface IpcEvents {
   'usage:sample': ResourceUsage[]
   /** A project's sources changed; its cached analysis was dropped. */
   'analysis:invalidated': string
+  /** A one-off message for the user, shown as a toast. */
+  notice: Notice
 }
 
 export type IpcEventName = keyof IpcEvents

@@ -14,6 +14,7 @@ import { ServiceDetail } from './components/ServiceDetail.js'
 import { LogsView } from './components/LogsView.js'
 import { RuntimesView } from './components/RuntimesView.js'
 import { SettingsView } from './components/SettingsView.js'
+import { Toasts } from './components/Toasts.js'
 import { formatBytes } from './components/primitives.js'
 import { sourceLabels } from './components/log-labels.js'
 
@@ -293,6 +294,8 @@ export function App(): React.JSX.Element {
           )}
         </div>
       </div>
+
+      <Toasts />
     </div>
   )
 }

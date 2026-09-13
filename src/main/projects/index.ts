@@ -759,6 +759,22 @@ export class ProjectManager extends EventEmitter {
     return this.emitChanged(this.find(projectId))
   }
 
+  /**
+   * On launch, start every project's enabled companions — the boot counterpart
+   * to a per-project start. Done project by project, sequentially, so the port
+   * a fixed-port process wants goes to whichever is reached first; a later one
+   * that finds it taken surfaces a port-conflict notice rather than winning.
+   *
+   * The dev server of a reverse-proxy site is deliberately not started here:
+   * only companions carry a user "auto" choice; the site itself is started on
+   * demand.
+   */
+  async autoStartProcesses(): Promise<void> {
+    for (const project of this.list()) {
+      await this.startEnabledProcesses(project)
+    }
+  }
+
   /** Start every companion the user has enabled. */
   async startEnabledProcesses(project: Project): Promise<void> {
     for (const spec of await this.describeProcesses(project)) {

@@ -2,7 +2,9 @@ import { ConfigStore } from './core/config-store.js'
 import { PortAllocator } from './core/port-allocator.js'
 import { ProcessManager } from './core/process-manager.js'
 import { LogAggregator } from './core/log-aggregator.js'
+import { Notifier } from './core/notifier.js'
 import { PrivilegedHelper } from './core/privileged-helper.js'
+import type { PortConflict } from '../shared/process.js'
 import { NativeBackend } from './backends/native-backend.js'
 import { DockerBackend } from './backends/docker-backend.js'
 import { ContainerRuntimes } from './containers/index.js'
@@ -29,6 +31,7 @@ export class HarborApp {
   readonly ports: PortAllocator
   readonly processes: ProcessManager
   readonly logs: LogAggregator
+  readonly notifier: Notifier
   readonly privileged: PrivilegedHelper
   readonly native: NativeBackend
   readonly containers: ContainerRuntimes
@@ -49,7 +52,22 @@ export class HarborApp {
     this.ports = new PortAllocator(this.store)
     this.processes = new ProcessManager(this.ports)
     this.logs = new LogAggregator(this.processes)
+    this.notifier = new Notifier()
     this.privileged = new PrivilegedHelper()
+
+    // A port conflict crashes a process without a spawn error, so it would
+    // otherwise vanish into the logs. Surface it: the one that bound the port
+    // keeps running, and this tells the user which one lost and why.
+    this.processes.on('port-conflict', ({ handle, port }: PortConflict) => {
+      const where = port ? `Port ${port} is already in use` : 'Its port is already in use'
+      this.notifier.notify({
+        level: 'error',
+        title: `${handle.label} couldn't start`,
+        message: `${where}. The process already holding it keeps running.`,
+        source: handle.owner.id
+      })
+      this.logs.push(handle.owner.id, handle.owner.role ?? 'process', `port conflict: ${where.toLowerCase()}`)
+    })
 
     this.native = new NativeBackend(this.processes)
     this.containers = new ContainerRuntimes(this.store)
@@ -147,6 +165,11 @@ export class HarborApp {
       }
       await this.services.startOwner(MACHINE_OWNER)
     }
+
+    // Bring up every companion the user left on "auto" (queue workers,
+    // schedulers, Vite, …). Sequential so that when two want the same fixed
+    // port the first to bind wins and the rest raise a port-conflict notice.
+    await this.projects.autoStartProcesses()
   }
 
   async shutdown(): Promise<void> {
