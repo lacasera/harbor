@@ -84,6 +84,28 @@ export function ProjectDetail({
   const [exposed, setExposed] = useState(false)
   const { copied, copy } = useCopy()
 
+  // The header PUBLIC pill is always mounted, but TunnelCard (which owns the
+  // tunnel controls) lives only on the Overview tab — so the pill keeps its own
+  // always-on subscription. A tunnel can be started from the CLI or another
+  // window, and it can die and restart on its own; the pill must never read
+  // "not exposed" while the project is publicly reachable, on any tab.
+  useEffect(() => {
+    let alive = true
+    const sync = (): void => {
+      void invoke('tunnel:status').then((status) => {
+        if (alive) setExposed(status.active.some((a) => a.projectId === project.id))
+      })
+    }
+    sync()
+    const offChanged = subscribe('tunnel:changed', (t) => t.projectId === project.id && sync())
+    const offClosed = subscribe('tunnel:closed', (id) => id === project.id && sync())
+    return () => {
+      alive = false
+      offChanged()
+      offClosed()
+    }
+  }, [project.id])
+
   const run = async (fn: () => Promise<ProjectDescriptor>): Promise<void> => {
     setBusy(true)
     setError(null)
@@ -221,7 +243,6 @@ export function ProjectDetail({
             copy={copy}
             onPatch={(patch) => void run(() => invoke('projects:update', project.id, patch))}
             onOpenServices={onOpenServices}
-            onExposedChange={setExposed}
           />
         )}
 
@@ -287,8 +308,7 @@ function Overview({
   copied,
   copy,
   onPatch,
-  onOpenServices,
-  onExposedChange
+  onOpenServices
 }: {
   project: ProjectDescriptor
   instances: ServiceInstanceDescriptor[]
@@ -305,7 +325,6 @@ function Overview({
     secure?: boolean
   }) => void
   onOpenServices: () => void
-  onExposedChange: (exposed: boolean) => void
 }): React.JSX.Element {
   const resolved = project.resolvedRuntime
   const runtime = runtimes.find((r) => r.id === resolved?.runtime)
@@ -509,7 +528,7 @@ function Overview({
           </button>
         </div>
 
-        <TunnelCard project={project} onExposedChange={onExposedChange} />
+        <TunnelCard project={project} />
       </div>
     </div>
   )
