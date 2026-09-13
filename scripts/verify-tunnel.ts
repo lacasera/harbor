@@ -14,6 +14,11 @@
  *   3. An unauthenticated provider explains exactly what is missing.
  *   4. A killed tunnel restarts, and the restart notification carries the NEW
  *      public URL (the ephemeral case that silently breaks the old one).
+ *   5. Two concurrent start() calls for one project spawn exactly one provider
+ *      process, and a later stop() leaves nothing running — the race that could
+ *      otherwise orphan a live, un-killable public tunnel.
+ *   6. A spawn that throws leaves the project startable again, not stuck
+ *      'starting' forever with no process.
  *
  * Honest gap: ngrok has no authtoken on this machine and modern ngrok needs one
  * even for an ephemeral tunnel, so the ngrok end-to-end path is NOT exercised —
@@ -33,8 +38,19 @@ import { TunnelProviders } from '../src/main/tunnels/registry.js'
 import { TunnelManager } from '../src/main/tunnels/manager.js'
 import type { TunnelDriver, TunnelOrigin, TunnelSpawnPlan } from '../src/main/tunnels/types.js'
 import type { TunnelCapability } from '../src/shared/tunnel.js'
+import type { ProcessHandle } from '../src/shared/process.js'
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** True while the OS still has this pid — the ground truth for "is it running". */
+const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
 
 const results: Array<[string, boolean, string]> = []
 const step = (name: string, ok: boolean, detail = ''): void => {
@@ -252,6 +268,101 @@ async function main(): Promise<void> {
     await mgr.stopAll()
     step('stopAll leaves nothing exposed', mgr.activeList().length === 0)
     // Cleanup any child the fake left running.
+    await processes.stopAll()
+  }
+
+  // ── 5. the start() race cannot orphan a live tunnel ───────────────────────
+  // Two start() calls for one project overlap on the probe() await. Before the
+  // fix, both got past the guard and both spawned; the second overwrote the
+  // first in the tracked map, so stop() killed one and left the other running —
+  // a public tunnel beyond Harbor's control. The fix reserves the slot after
+  // probe(), synchronously with no await before spawn(), so only one wins.
+  {
+    const providers = new TunnelProviders()
+    // A probe() that genuinely yields, so both start() calls are inside the
+    // window at once — the race is exercised, not merely assumed away.
+    class RacingDriver extends FakeDriver {
+      override async probe(): Promise<TunnelCapability> {
+        await wait(20)
+        return super.probe()
+      }
+    }
+    const fake = new RacingDriver()
+    providers.register(fake)
+    const processes = new ProcessManager({} as never)
+    const mgr = tunnelManager(providers, processes, new Notifier())
+
+    const tunnelProcs = (): ProcessHandle[] =>
+      processes.list().filter((h) => h.owner.role === 'tunnel' && h.owner.id === 'p1')
+
+    const [a, b] = await Promise.all([mgr.start('p1'), mgr.start('p1')])
+    // plan() is only reached from inside spawn(), so runs is the number of
+    // provider processes actually launched — the fact that most directly proves
+    // the second caller never spawned.
+    step(
+      'two concurrent start() calls spawn exactly one provider process',
+      fake.runs === 1 && tunnelProcs().length === 1,
+      `${fake.runs} spawn(s), ${tunnelProcs().length} process(es)`
+    )
+    step(
+      'both racing callers see the one shared tunnel',
+      a.projectId === 'p1' && b.projectId === 'p1' && mgr.activeList().length === 1,
+      `${mgr.activeList().length} tracked`
+    )
+
+    await mgr.stop('p1')
+    const stillAlive = tunnelProcs().filter((h) => h.pid !== null && isAlive(h.pid))
+    step(
+      'stop() after the race leaves nothing running — no orphan',
+      mgr.activeList().length === 0 && stillAlive.length === 0,
+      `${stillAlive.length} process(es) still alive`
+    )
+    await processes.stopAll()
+  }
+
+  // ── 6. a spawn that throws leaves the project startable again ──────────────
+  // Before the fix, a spawn throw left the tracked entry behind, so the project
+  // stayed 'starting' forever and every later start() short-circuited on it. The
+  // fix deletes the entry on throw, so the next start() is a clean start.
+  {
+    const providers = new TunnelProviders()
+    class FlakyDriver extends FakeDriver {
+      failNext = true
+      override plan(origin: TunnelOrigin): TunnelSpawnPlan {
+        if (this.failNext) {
+          this.failNext = false
+          return { command: '/nonexistent/harbor-tunnel-binary', args: [] }
+        }
+        return super.plan(origin)
+      }
+    }
+    const fake = new FlakyDriver()
+    providers.register(fake)
+    const processes = new ProcessManager({} as never)
+    const mgr = tunnelManager(providers, processes, new Notifier())
+
+    let threw = false
+    try {
+      await mgr.start('p1')
+    } catch {
+      threw = true
+    }
+    step('a failed spawn surfaces the error to the caller', threw)
+    step(
+      'a failed spawn leaves nothing tracked',
+      mgr.activeList().length === 0,
+      `${mgr.activeList().length} tracked`
+    )
+
+    // The real proof: exposing it again succeeds, rather than returning the
+    // stuck 'starting' entry a lingering track would have kept.
+    const again = await mgr.start('p1')
+    step(
+      'the project is startable again after a failed spawn',
+      Boolean(again.url) && again.state === 'live',
+      `state=${again.state}, url=${again.url ?? '(none)'}`
+    )
+    await mgr.stopAll()
     await processes.stopAll()
   }
 
