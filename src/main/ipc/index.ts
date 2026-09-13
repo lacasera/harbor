@@ -51,6 +51,7 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   harbor.intelligence.on('invalidated', (projectId: string) =>
     send('analysis:invalidated', projectId)
   )
+  harbor.notifier.on('notice', (notice) => send('notice', notice))
 
   const updater = new Updater(harbor.logs)
 
@@ -119,6 +120,11 @@ export function registerIpc(harbor: HarborApp, getWindow: () => BrowserWindow | 
   handle('logs:query', (query) => harbor.logs.query(query))
   handle('logs:sources', () => harbor.logs.knownSources())
   handle('logs:clear', () => harbor.logs.clear())
+
+  // ── notices ─────────────────────────────────────────────────────────────
+  // Port conflicts and the like are raised during boot, before this window
+  // exists; the renderer drains them once on mount and then listens live.
+  handle('notices:drain', () => harbor.notifier.drain())
 
   // ── code intelligence ───────────────────────────────────────────────────
   handle('intelligence:analyze', (projectId, force) =>

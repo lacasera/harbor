@@ -27,6 +27,7 @@ import {
 import { EnvLines, toRows, toText } from './EnvBlock.js'
 import { Insights } from './Insights.js'
 import { LogRows } from './LogsView.js'
+import { ServiceIcon } from './ServiceIcon.js'
 
 /** Kept beside the UI that offers them; the main process is the authority. */
 const PROJECT_TYPES = [
@@ -172,6 +173,7 @@ export function ProjectDetail({
           onSelect={setTab}
           tabs={[
             { id: 'overview', label: 'Overview' },
+            { id: 'services', label: 'Services' },
             { id: 'env', label: 'Env' },
             { id: 'insights', label: 'Insights' },
             { id: 'logs', label: 'Logs' },
@@ -187,14 +189,23 @@ export function ProjectDetail({
           <Overview
             project={project}
             runtimes={runtimes}
-            services={services}
             proc={proc}
             sample={sample}
             busy={busy}
             copied={copied}
             copy={copy}
             onPatch={(patch) => void run(() => invoke('projects:update', project.id, patch))}
-            onOpenServices={onOpenServices}
+            onManageServices={() => setTab('services')}
+          />
+        )}
+
+        {tab === 'services' && (
+          <ServicesTab
+            project={project}
+            services={services}
+            busy={busy}
+            onPatch={(patch) => void run(() => invoke('projects:update', project.id, patch))}
+            onManage={onOpenServices}
           />
         )}
 
@@ -202,7 +213,7 @@ export function ProjectDetail({
           <EnvTab
             project={project}
             services={services}
-            onManage={() => setTab('overview')}
+            onManage={() => setTab('services')}
           />
         )}
 
@@ -243,18 +254,16 @@ export function ProjectDetail({
 function Overview({
   project,
   runtimes,
-  services,
   proc,
   sample,
   busy,
   copied,
   copy,
   onPatch,
-  onOpenServices
+  onManageServices
 }: {
   project: ProjectDescriptor
   runtimes: RuntimeDescriptor[]
-  services: ServiceDescriptor[]
   proc: ProcessHandle | undefined
   sample: ResourceUsage | undefined
   busy: boolean
@@ -265,9 +274,8 @@ function Overview({
     redetectType?: boolean
     runtimeOverride?: { runtime: string; version: string } | null
     secure?: boolean
-    serviceIds?: string[]
   }) => void
-  onOpenServices: () => void
+  onManageServices: () => void
 }): React.JSX.Element {
   const resolved = project.resolvedRuntime
   const runtime = runtimes.find((r) => r.id === resolved?.runtime)
@@ -443,42 +451,132 @@ function Overview({
 
         <div className="card card-pad">
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Services</div>
-          <div className="hint" style={{ marginBottom: 10 }}>
-            Chosen here, exported on the Env tab
-          </div>
-          <div className="hstack" style={{ gap: 6 }}>
-            {services.map((service) => {
-              const on = project.serviceIds.includes(service.id)
-              return (
-                <button
-                  key={service.id}
-                  type="button"
-                  className={`chip ${on ? 'on' : ''}`}
-                  disabled={busy}
-                  onClick={() =>
-                    onPatch({
-                      serviceIds: on
-                        ? project.serviceIds.filter((id) => id !== service.id)
-                        : [...project.serviceIds, service.id]
-                    })
-                  }
-                >
-                  <StatusDot status={statusOf(service.status.health)} small />
-                  {service.displayName}
-                </button>
-              )
-            })}
+          <div className="hint">
+            {project.serviceIds.length
+              ? `${project.serviceIds.length} attached · exported on the Env tab`
+              : 'None attached yet'}
           </div>
           <button
             type="button"
             className="back"
             style={{ marginTop: 12, color: 'var(--ac)' }}
-            onClick={onOpenServices}
+            onClick={onManageServices}
           >
-            Manage services →
+            {project.serviceIds.length ? 'Manage services →' : 'Attach services →'}
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The services this project uses. Attaching one is an explicit per-project
+ * choice — not "whatever happens to be running" — because it drives the
+ * aggregated .env block on the Env tab. Start/stop lives on the global Services
+ * screen; here you only pick which ones this project connects to.
+ */
+function ServicesTab({
+  project,
+  services,
+  busy,
+  onPatch,
+  onManage
+}: {
+  project: ProjectDescriptor
+  services: ServiceDescriptor[]
+  busy: boolean
+  onPatch: (patch: { serviceIds?: string[] }) => void
+  onManage: () => void
+}): React.JSX.Element {
+  const names = useMemo(() => services.map((s) => s.displayName), [services])
+  const attachedIds = new Set(project.serviceIds)
+
+  const toggle = (id: string): void =>
+    onPatch({
+      serviceIds: attachedIds.has(id)
+        ? project.serviceIds.filter((x) => x !== id)
+        : [...project.serviceIds, id]
+    })
+
+  const attached = services.filter((s) => attachedIds.has(s.id))
+  const available = services.filter((s) => !attachedIds.has(s.id))
+
+  const card = (service: ServiceDescriptor): React.JSX.Element => {
+    const on = attachedIds.has(service.id)
+    const status = statusOf(service.status.health)
+    const ports = service.status.ports.length ? service.status.ports : service.defaultPorts
+    return (
+      <div key={service.id} className={`service-card ${on ? 'attached' : ''}`}>
+        <div className="top">
+          <ServiceIcon
+            id={service.id}
+            displayName={service.displayName}
+            icon={service.icon}
+            tint={service.tint}
+            catalogue={names}
+          />
+          <div className="meta">
+            <div className="title">
+              <span>{service.displayName}</span>
+              {!service.installed && <span className="pill">not installed</span>}
+            </div>
+            <div className="desc">{service.description}</div>
+          </div>
+          <Toggle
+            on={on}
+            label={`${on ? 'Detach' : 'Attach'} ${service.displayName}`}
+            disabled={busy}
+            onChange={() => toggle(service.id)}
+          />
+        </div>
+        <div className="foot">
+          <span className="hstack" style={{ gap: 6 }}>
+            <StatusDot status={status} />
+            {service.status.health}
+          </span>
+          <span className="mono small muted">{ports.map((p) => `:${p}`).join(' ') || '—'}</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="stack" style={{ gap: 18 }}>
+      <div className="card card-pad">
+        <div className="hstack" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Backing services</div>
+            <div className="hint" style={{ marginTop: 3 }}>
+              Attach the services this project connects to. Their connection variables are exported
+              on the Env tab; starting and stopping them lives on the Services screen.
+            </div>
+          </div>
+          <button type="button" className="back" style={{ color: 'var(--ac)' }} onClick={onManage}>
+            Open Services →
+          </button>
+        </div>
+      </div>
+
+      <section>
+        <div className="section-label">
+          Attached{attached.length ? ` · ${attached.length}` : ''}
+        </div>
+        {attached.length ? (
+          <div className="service-grid attach">{attached.map(card)}</div>
+        ) : (
+          <p className="small muted" style={{ marginTop: 4 }}>
+            Nothing attached yet — pick from the list below.
+          </p>
+        )}
+      </section>
+
+      {available.length > 0 && (
+        <section>
+          <div className="section-label">Available</div>
+          <div className="service-grid attach">{available.map(card)}</div>
+        </section>
+      )}
     </div>
   )
 }
@@ -579,10 +677,10 @@ function ProcessesTab({
       </div>
 
       <div className="proc-item-actions">
-        <label className="proc-auto" title="Start this with the project">
+        <label className="proc-auto" title="Start this automatically when Harbor launches">
           <Toggle
             on={p.enabled}
-            label={`Start ${p.label} with the project`}
+            label={`Start ${p.label} automatically when Harbor launches`}
             disabled={busy || working === p.id}
             onChange={(enabled) =>
               act(p.id, () => invoke('projects:updateProcess', project.id, p.id, { enabled }))
@@ -906,7 +1004,7 @@ function EnvTab({
         <p className="small muted" style={{ marginTop: 12 }}>
           No services selected for this project yet —{' '}
           <button type="button" className="back" style={{ color: 'var(--ac)' }} onClick={onManage}>
-            choose them on the Overview tab
+            attach them on the Services tab
           </button>
           .
         </p>

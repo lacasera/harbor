@@ -57,6 +57,19 @@ export interface ProcessHandle {
   restarts: number
 }
 
+/**
+ * A managed process reported that the port it wanted was already taken. Emitted
+ * by ProcessManager off the child's stderr, so it fires for any runtime that
+ * says so — Node's EADDRINUSE, Go's "address already in use", artisan serve, etc.
+ */
+export interface PortConflict {
+  handle: ProcessHandle
+  /** The contested port when it could be read off the handle or the message. */
+  port: number | null
+  /** The stderr line that revealed the conflict. */
+  detail: string
+}
+
 export interface ResourceUsage {
   processId: string
   pid: number
