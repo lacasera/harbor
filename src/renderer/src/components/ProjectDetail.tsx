@@ -34,6 +34,7 @@ import { LogRows } from './LogsView.js'
 import { ExternalLink } from './ExternalLink.js'
 import { ServiceIcon } from './ServiceIcon.js'
 import { ServiceInstancePanel } from './ServiceInstancePanel.js'
+import { TunnelCard } from './TunnelCard.js'
 
 /** Kept beside the UI that offers them; the main process is the authority. */
 const PROJECT_TYPES = [
@@ -80,7 +81,28 @@ export function ProjectDetail({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmForget, setConfirmForget] = useState(false)
+  const [exposed, setExposed] = useState(false)
   const { copied, copy } = useCopy()
+
+  // A tunnel can be started from the CLI or another window, and it can die and
+  // restart on its own — so the "public" marker follows the live tunnel state
+  // rather than anything this window did.
+  useEffect(() => {
+    let alive = true
+    const sync = (): void => {
+      void invoke('tunnel:status').then((status) => {
+        if (alive) setExposed(status.active.some((a) => a.projectId === project.id))
+      })
+    }
+    sync()
+    const offChanged = subscribe('tunnel:changed', (t) => t.projectId === project.id && sync())
+    const offClosed = subscribe('tunnel:closed', (id) => id === project.id && sync())
+    return () => {
+      alive = false
+      offChanged()
+      offClosed()
+    }
+  }, [project.id])
 
   const run = async (fn: () => Promise<ProjectDescriptor>): Promise<void> => {
     setBusy(true)
@@ -122,6 +144,11 @@ export function ProjectDetail({
                 {typeLabel(project.frameworkId, project.typeId)}
               </span>
               <span className="pill mono">{project.serveModel}</span>
+              {exposed && (
+                <span className="pill" style={{ color: 'var(--am)', borderColor: 'var(--am)' }}>
+                  ● PUBLIC
+                </span>
+              )}
             </div>
             <div className="hstack" style={{ gap: 6, marginTop: 6, paddingLeft: 17 }}>
               <ExternalLink className="mono" style={{ fontSize: 12.5 }} href={project.url}>
@@ -498,6 +525,8 @@ function Overview({
             Browse the catalogue →
           </button>
         </div>
+
+        <TunnelCard project={project} />
       </div>
     </div>
   )

@@ -130,6 +130,29 @@ interface Diagnostic {
   detail: string
   remedy?: string
 }
+interface TunnelCapability {
+  provider: string
+  displayName: string
+  installed: boolean
+  authenticated: boolean
+  authHint?: string
+  hostname: 'reserved' | 'ephemeral' | 'unknown'
+  detail?: string
+}
+interface ActiveTunnel {
+  projectName: string
+  domain: string
+  provider: string
+  url: string | null
+  hostname: string
+  restarts: number
+  state: string
+}
+interface TunnelStatus {
+  defaultProvider: string
+  providers: TunnelCapability[]
+  active: ActiveTunnel[]
+}
 
 const args = process.argv.slice(2)
 const json = args.includes('--json')
@@ -219,6 +242,9 @@ const HELP = `harbor — local development platform
   harbor use <runtime@version> [name]
                                    pin a project to a runtime version
   harbor env [name]                the .env block for a project's services
+  harbor tunnel [name]             expose a project publicly, print the URL
+  harbor tunnel stop [name]        take the tunnel down
+  harbor tunnel status             which projects are exposed, and where
   harbor services [name]           service instances, all or for one project
   harbor start [name] [service]    start a project's services
   harbor stop [name] [service]     stop them
@@ -438,6 +464,64 @@ async function main(): Promise<void> {
       }
       const updated = await call<{ tld: string }>('settings:update', [{ tld: params[0] }])
       return out(json ? updated : `Local TLD is now .${updated.tld}`)
+    }
+
+    case 'tunnel': {
+      const sub = params[0]
+
+      if (sub === 'status') {
+        const status = await call<TunnelStatus>('tunnel:status')
+        if (json) return out(status)
+        out(`Default provider: ${status.defaultProvider}`)
+        for (const p of status.providers) {
+          const state = !p.installed
+            ? 'not installed'
+            : !p.authenticated
+              ? 'not authenticated'
+              : `ready (${p.hostname})`
+          out(`  ${p.displayName.padEnd(20)} ${state}`)
+          if (p.authHint && !p.authenticated) out(`        ${p.authHint}`)
+        }
+        if (!status.active.length) return out('\nNo projects are exposed.')
+        out('\nExposed now:')
+        for (const t of status.active) {
+          out(`  ${t.domain.padEnd(24)} ${t.url ?? `(${t.state})`}  via ${t.provider}`)
+        }
+        return
+      }
+
+      if (sub === 'stop') {
+        const project = await findProject(params[1])
+        const status = await call<TunnelStatus>('tunnel:stop', [project.id])
+        return out(json ? status : `Stopped tunnel for ${project.name} — no longer public`)
+      }
+
+      const project = await findProject(sub)
+      let status = await call<TunnelStatus>('tunnel:status')
+      const provider = status.defaultProvider
+      let cap = status.providers.find((p) => p.provider === provider)
+
+      // Harbor installs the provider itself rather than failing with a bare
+      // "command not found" — the same shape as runtimes:install and the rest.
+      if (cap && !cap.installed) {
+        process.stderr.write(`Installing ${cap.displayName}…\n`)
+        status = await call<TunnelStatus>('tunnel:install', [provider])
+        cap = status.providers.find((p) => p.provider === provider)
+      }
+      if (cap && !cap.authenticated) {
+        return fail(cap.authHint ?? `${cap.displayName} is not authenticated.`)
+      }
+
+      const tunnel = await call<ActiveTunnel>('tunnel:start', [project.id, provider])
+      if (json) return out(tunnel)
+      out(`⚠  ${project.name} is now PUBLIC`)
+      out(`   ${tunnel.url ?? 'connecting… run: harbor tunnel status'}`)
+      out(`   Serving ${tunnel.domain} to anyone with the link, via ${tunnel.provider}.`)
+      if (tunnel.hostname === 'ephemeral') {
+        out('   The URL changes if the tunnel restarts.')
+      }
+      out(`   Exposure ends when Harbor quits, or: harbor tunnel stop ${project.name}`)
+      return
     }
 
     case 'restart': {

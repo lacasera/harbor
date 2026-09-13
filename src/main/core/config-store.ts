@@ -50,6 +50,8 @@ export interface PersistedState {
      * telling them to start it.
      */
     containerRuntime: string
+    /** The tunnel provider a bare `harbor tunnel` uses. */
+    tunnelProvider: string
   }
 }
 
@@ -67,7 +69,8 @@ export const EMPTY_STATE: PersistedState = {
     autoStartServices: false,
     httpPort: 80,
     httpsPort: 443,
-    containerRuntime: AUTO_RUNTIME
+    containerRuntime: AUTO_RUNTIME,
+    tunnelProvider: 'cloudflared'
   }
 }
 

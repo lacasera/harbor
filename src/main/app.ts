@@ -18,6 +18,7 @@ import { ProjectManager } from './projects/index.js'
 import { DnsmasqManager } from './projects/dnsmasq.js'
 import { TlsManager } from './projects/tls.js'
 import { CodeIntelligence, createCodeIntelligence } from './intelligence/index.js'
+import { TunnelManager, TunnelProviders, registerTunnelDrivers } from './tunnels/index.js'
 import { MACHINE_OWNER } from '../shared/service.js'
 import { ensureDirs, HARBOR_HOME } from './core/paths.js'
 
@@ -44,6 +45,7 @@ export class HarborApp {
   readonly dns: DnsmasqManager
   readonly tls: TlsManager
   readonly intelligence: CodeIntelligence
+  readonly tunnels: TunnelManager
 
   constructor() {
     ensureDirs()
@@ -116,6 +118,26 @@ export class HarborApp {
     this.projects.attachServices(this.services)
 
     this.dns = new DnsmasqManager(this.native, this.privileged, this.processes)
+
+    // Tunnels expose a project through nginx, so a tunnel needs the project's
+    // hostname (to preserve as Host/SNI) and whether it is secured (to forward
+    // to the right origin scheme). Both come from the project store.
+    const tunnelProviders = new TunnelProviders()
+    registerTunnelDrivers(tunnelProviders, { native: this.native })
+    this.tunnels = new TunnelManager(
+      tunnelProviders,
+      this.processes,
+      this.notifier,
+      this.logs,
+      this.store,
+      (projectId) => {
+        const project = this.store.get().projects.find((p) => p.id === projectId)
+        return project
+          ? { name: project.name, domain: project.domain, secure: project.secure }
+          : null
+      }
+    )
+
     this.intelligence = createCodeIntelligence()
     // Stop watching a project's sources once it is no longer managed.
     this.projects.on('forgotten', (id: string) => this.intelligence.unwatch(id))
@@ -176,6 +198,10 @@ export class HarborApp {
     this.processes.stopUsagePolling()
     this.services.stopHealthPolling()
     this.intelligence.stopAll()
+    // Before stopAll: this clears each tunnel's restart intent, so the process
+    // dying during shutdown is not mistaken for a crash to recover from — and it
+    // is what guarantees no exposure survives a Harbor restart.
+    await this.tunnels.stopAll().catch(() => undefined)
     await this.fpm.stopAll().catch(() => undefined)
     await this.services.stopAll()
     await this.processes.stopAll()

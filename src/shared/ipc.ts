@@ -25,6 +25,7 @@ import type { LogLine, LogQuery } from './logs.js'
 import type { AnalysisResult } from './intelligence.js'
 import type { Diagnostic } from './diagnostics.js'
 import type { Notice } from './notice.js'
+import type { ActiveTunnel, TunnelProviderId, TunnelStatus } from './tunnel.js'
 
 /** Where the `harbor` command lives and whether a shell can find it. */
 export interface CliStatus {
@@ -88,6 +89,8 @@ export interface AppSettings {
   httpsPort: number
   /** Chosen container runtime, or `auto`. */
   containerRuntime: string
+  /** The tunnel provider a bare `harbor tunnel` uses. */
+  tunnelProvider: string
 }
 
 /**
@@ -246,6 +249,15 @@ export interface IpcContract {
   /** Clear macOS resolver caches; stale negatives survive a dnsmasq restart. */
   'dns:flush': [[], DnsStatus]
 
+  /**
+   * Public tunnels. Exposure is always deliberate: there is no auto-start and
+   * no persistence, so nothing here starts a tunnel except an explicit call.
+   */
+  'tunnel:status': [[], TunnelStatus]
+  'tunnel:install': [[provider: TunnelProviderId], TunnelStatus]
+  'tunnel:start': [[projectId: string, provider?: TunnelProviderId], ActiveTunnel]
+  'tunnel:stop': [[projectId: string], TunnelStatus]
+
   'nginx:status': [[], NginxStatus]
   'nginx:reload': [[], void]
   /** Add Harbor's include to the system nginx.conf. Prompts for root. */
@@ -274,6 +286,10 @@ export interface IpcEvents {
   'analysis:invalidated': string
   /** A one-off message for the user, shown as a toast. */
   notice: Notice
+  /** An exposed project's tunnel changed state — became live, restarted, errored. */
+  'tunnel:changed': ActiveTunnel
+  /** A project is no longer exposed; the id it had. */
+  'tunnel:closed': string
 }
 
 export type IpcEventName = keyof IpcEvents
