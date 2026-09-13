@@ -170,6 +170,23 @@ export async function runDiagnostics(harbor: HarborApp): Promise<Diagnostic[]> {
     required: false
   })
 
+  // ── public exposure ───────────────────────────────────────────────────────
+  // Only ever present when something is exposed, so it is loud when it matters
+  // and silent otherwise: the dangerous failure is forgetting a tunnel is up.
+  const tunnels = harbor.tunnels.activeList()
+  if (tunnels.length) {
+    out.push({
+      id: 'tunnels',
+      label: 'Public tunnels',
+      status: 'warn',
+      detail: tunnels
+        .map((t) => `${t.domain} → ${t.url ?? `${t.provider} (connecting)`}`)
+        .join('; '),
+      remedy: `Reachable from the internet. Stop with: harbor tunnel stop <name>`,
+      required: false
+    })
+  }
+
   const cli = cliStatus()
   out.push({
     id: 'cli',

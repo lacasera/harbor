@@ -74,6 +74,8 @@ export function registerIpc(
     send('analysis:invalidated', projectId)
   )
   harbor.notifier.on('notice', (notice) => send('notice', notice))
+  harbor.tunnels.on('changed', (tunnel) => send('tunnel:changed', tunnel))
+  harbor.tunnels.on('closed', (projectId: string) => send('tunnel:closed', projectId))
 
   const updater = new Updater(harbor.logs)
 
@@ -290,6 +292,18 @@ export function registerIpc(
   handle('dns:configureResolver', async () => {
     await harbor.dns.configureResolver(tld())
     return harbor.dns.status(tld())
+  })
+
+  // ── tunnels ─────────────────────────────────────────────────────────────
+  handle('tunnel:status', () => harbor.tunnels.status())
+  handle('tunnel:install', async (provider) => {
+    await harbor.tunnels.install(provider)
+    return harbor.tunnels.status()
+  })
+  handle('tunnel:start', (projectId, provider) => harbor.tunnels.start(projectId, provider))
+  handle('tunnel:stop', async (projectId) => {
+    await harbor.tunnels.stop(projectId)
+    return harbor.tunnels.status()
   })
 
   // ── nginx ───────────────────────────────────────────────────────────────
